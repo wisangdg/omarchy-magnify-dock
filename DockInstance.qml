@@ -1,0 +1,1082 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Effects
+import Quickshell
+import Quickshell.Wayland
+import Quickshell.Io
+import qs.Commons
+import qs.Ui
+import "DockModel.js" as DockModel
+
+Item {
+  id: root
+
+  // Injected by Omarchy Shell
+  property var shell: null
+  property var manifest: null
+  property var dockScreen: null
+  property var appLibrary: shell ? shell.appLibrary : null
+
+  // Sleek macOS Dock Dimensions & Spacing
+  property real baseIconSize: 42
+  property real iconPixelSize: 34
+  property real maxMagnification: 1.6
+  property real magnifyRadius: 140
+  property real dockPadding: 8
+  property real itemSpacing: 6
+  property real capsuleHeight: root.baseIconSize + root.dockPadding * 2
+  property real layoutExpansionRatio: 0.82
+  property int magnificationDuration: 55
+
+  readonly property bool environmentReduceMotion: {
+    var value = String(Quickshell.env("OMARCHY_REDUCE_MOTION") || "").toLowerCase()
+    return value === "1" || value === "true" || value === "yes"
+  }
+  property bool systemReduceMotion: false
+  readonly property bool reduceMotion: root.environmentReduceMotion || root.systemReduceMotion
+
+  // Always visible macOS Mode
+  property bool autoHide: false
+  property bool reserveSpace: true
+  property bool isDockHovered: false
+  property bool edgeHovered: false
+  property bool dockPresented: true
+  property real hoverCursorX: -1
+
+  // Fixed invariant baseline geometry to eliminate jitter/shaking
+  property var baselineGeometry: null
+
+  // Magnification scales state
+  property real launcherScale: 1.0
+  property real animatedLauncherScale: root.launcherScale
+  property real launcherOffsetX: 0
+  property real animatedLauncherOffsetX: root.launcherOffsetX
+  property var pinnedScales: []
+  property var unpinnedScales: []
+  property var pinnedOffsets: []
+  property var unpinnedOffsets: []
+
+  // Track fast pointer updates without restarting a discrete animation for
+  // every event. This keeps the velocity continuous while entering, moving
+  // across, and leaving the dock.
+  Behavior on animatedLauncherScale {
+    SmoothedAnimation {
+      velocity: -1
+      duration: root.reduceMotion ? 0 : root.magnificationDuration
+      maximumEasingTime: root.reduceMotion ? 0 : 28
+    }
+  }
+
+  Behavior on animatedLauncherOffsetX {
+    SmoothedAnimation {
+      velocity: -1
+      duration: root.reduceMotion ? 0 : root.magnificationDuration
+      maximumEasingTime: root.reduceMotion ? 0 : 28
+    }
+  }
+
+  // Dock items and pinned apps state
+  // null means no saved preference; [] means explicitly no pinned apps.
+  property var customPinnedApps: null
+  property var dockData: ({ pinned: [], unpinned: [], totalItems: 0 })
+
+  // Drag & drop reorder state
+  property int draggingPinnedIndex: -1
+  property int dragTargetIndex: -1
+  property real dragGrabOffsetX: 0
+  property real dragGrabOffsetY: 0
+  property real dragVisualX: 0
+  property real dragVisualY: 0
+  property bool isDropSettling: false
+  property real dropSettleStartX: 0
+  property real dropSettleStartY: 0
+  property real dropSettleTargetX: 0
+  property real dropSettleProgress: 0.0
+
+  NumberAnimation {
+    id: dropSettleAnimation
+    target: root
+    property: "dropSettleProgress"
+    from: 0.0
+    to: 1.0
+    duration: root.reduceMotion ? 0 : 180
+    easing.type: Easing.OutCubic
+
+    onRunningChanged: {
+      if (!running && root.isDropSettling) {
+        root.finishDropReorder()
+      }
+    }
+  }
+
+  onDropSettleProgressChanged: {
+    if (root.isDropSettling) {
+      root.dragVisualX = root.dropSettleStartX + (root.dropSettleTargetX - root.dropSettleStartX) * root.dropSettleProgress
+      root.dragVisualY = root.dropSettleStartY * (1.0 - root.dropSettleProgress)
+    }
+  }
+
+  // Hover Tooltip State
+  property string tooltipText: ""
+  property bool tooltipVisible: false
+  property var tooltipTarget: null
+  property var pendingTooltipTarget: null
+  property string pendingTooltipText: ""
+
+  // Context menu state is held by the dock so auto-hide remains suspended
+  // while the menu is open.
+  property bool contextMenuOpen: false
+  property var contextTarget: null
+  property var contextAnchor: null
+  property double contextMenuOpenedAt: 0
+
+  function requestTooltip(target, text) {
+    if (root.draggingPinnedIndex >= 0) return
+    tooltipHideTimer.stop()
+    root.pendingTooltipTarget = target
+    root.pendingTooltipText = String(text || "")
+
+    if (root.tooltipVisible) {
+      root.tooltipTarget = target
+      root.tooltipText = root.pendingTooltipText
+      root.pendingTooltipTarget = null
+      root.pendingTooltipText = ""
+      Qt.callLater(function() { tooltipWindow.anchor.updateAnchor() })
+      return
+    }
+    tooltipShowTimer.restart()
+  }
+
+  function releaseTooltip(target) {
+    if (root.pendingTooltipTarget === target) {
+      tooltipShowTimer.stop()
+      root.pendingTooltipTarget = null
+      root.pendingTooltipText = ""
+    }
+    if (root.tooltipTarget === target) tooltipHideTimer.restart()
+  }
+
+  function clearTooltip() {
+    tooltipShowTimer.stop()
+    tooltipHideTimer.stop()
+    root.tooltipVisible = false
+    root.tooltipTarget = null
+    root.pendingTooltipTarget = null
+    root.pendingTooltipText = ""
+  }
+
+  function revealDock() {
+    edgeRevealTimer.stop()
+    hideDockTimer.stop()
+    root.dockPresented = true
+  }
+
+  function scheduleDockHide() {
+    // The edge is only a reveal trigger. Keeping it in this condition can
+    // leave the dock permanently open after the first reveal because a
+    // compositor does not always emit an exit while the input mask changes.
+    if (root.autoHide && !root.isDockHovered && !root.contextMenuOpen) {
+      hideDockTimer.restart()
+    }
+  }
+
+  function openContextMenu(item, target) {
+    root.clearTooltip()
+    // Recreate the popup lifecycle for every request. Layer-shell geometry can
+    // change after toggling reserve space; reusing an already-true visible
+    // state may otherwise leave the compositor with a stale input surface.
+    root.contextMenuOpen = false
+    root.contextTarget = item
+    root.contextAnchor = target
+    root.contextMenuOpenedAt = Date.now()
+    root.revealDock()
+    Qt.callLater(function() {
+      if (root.contextAnchor !== target) return
+      root.contextMenuOpen = true
+      Qt.callLater(function() {
+        if (contextWindow && contextWindow.anchor && typeof contextWindow.anchor.updateAnchor === "function") {
+          contextWindow.anchor.updateAnchor()
+        }
+      })
+    })
+  }
+
+  function closeContextMenu() {
+    root.contextMenuOpen = false
+    root.contextTarget = null
+    root.contextAnchor = null
+    root.scheduleDockHide()
+  }
+
+  onAutoHideChanged: {
+    if (root.autoHide) root.scheduleDockHide()
+    else root.revealDock()
+  }
+
+  Timer {
+    id: tooltipShowTimer
+    interval: 380
+    onTriggered: {
+      if (!root.pendingTooltipTarget || root.pendingTooltipText === "") return
+      root.tooltipTarget = root.pendingTooltipTarget
+      root.tooltipText = root.pendingTooltipText
+      root.pendingTooltipTarget = null
+      root.pendingTooltipText = ""
+      root.tooltipVisible = true
+    }
+  }
+
+  Timer {
+    id: tooltipHideTimer
+    interval: 70
+    onTriggered: root.clearTooltip()
+  }
+
+  Timer {
+    id: edgeRevealTimer
+    interval: 0
+    onTriggered: root.revealDock()
+  }
+
+  Timer {
+    id: hideDockTimer
+    interval: 30
+    onTriggered: {
+      if (root.autoHide && !root.isDockHovered && !root.contextMenuOpen) {
+        root.clearTooltip()
+        root.hoverCursorX = -1
+        root.updateMagnification()
+        root.dockPresented = false
+      }
+    }
+  }
+
+  // A popup normally closes through one of its actions or when the pointer
+  // leaves it. This watchdog also recovers from a lost popup/input event so a
+  // stale contextMenuOpen value can never disable auto-hide indefinitely.
+  Timer {
+    id: contextMenuDismissTimer
+    interval: 180
+    repeat: true
+    running: root.contextMenuOpen
+    onTriggered: {
+      var graceElapsed = Date.now() - root.contextMenuOpenedAt > 900
+      if (graceElapsed && !root.isDockHovered && !dockContextMenu.containsPointer) {
+        root.closeContextMenu()
+      }
+    }
+  }
+
+  Process {
+    id: reducedMotionProbe
+    running: true
+    command: ["gsettings", "get", "org.gnome.desktop.interface", "enable-animations"]
+    stdout: SplitParser {
+      onRead: function(line) {
+        root.systemReduceMotion = String(line || "").trim() === "false"
+      }
+    }
+  }
+
+  // Settings File Persistence
+  readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy/dock-pinned-macos.json"
+
+  FileView {
+    id: configFileView
+    path: root.configPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.loadConfig(text())
+    onLoadFailed: root.loadConfig("")
+  }
+
+  function loadConfig(rawText) {
+    try {
+      if (rawText && rawText.trim().length > 0) {
+        var parsed = JSON.parse(rawText)
+        if (Array.isArray(parsed.pinned)) {
+          root.customPinnedApps = parsed.pinned
+        }
+        if (typeof parsed.autoHide === "boolean") {
+          root.autoHide = parsed.autoHide
+        }
+        if (typeof parsed.reserveSpace === "boolean") {
+          root.reserveSpace = parsed.reserveSpace
+        }
+      }
+    } catch (e) {}
+    root.rebuildDock()
+  }
+
+  function saveConfig() {
+    var payload = {
+      version: 1,
+      autoHide: root.autoHide,
+      reserveSpace: root.reserveSpace,
+      pinned: Array.isArray(root.customPinnedApps) ? root.customPinnedApps : DockModel.defaultPinnedApps
+    }
+    var jsonStr = JSON.stringify(payload, null, 2)
+    if (Util && typeof Util.execDetached === "function") {
+      var cmd = "cat << 'JSONEOF' > " + Util.shellQuote(root.configPath) + "\n" + jsonStr + "\nJSONEOF"
+      Util.execDetached("bash -c " + Util.shellQuote(cmd))
+    }
+  }
+
+  function togglePinApp(appId) {
+    if (!appId) return
+    var currentList = Array.isArray(root.customPinnedApps)
+      ? root.customPinnedApps
+      : DockModel.defaultPinnedApps
+    var list = currentList.slice()
+    var idx = -1
+    for (var i = 0; i < list.length; i++) {
+      var p = typeof list[i] === "string" ? list[i] : (list[i].id || "")
+      if (p === appId || DockModel.matchApp(p, appId)) {
+        idx = i
+        break
+      }
+    }
+
+    if (idx >= 0) {
+      list.splice(idx, 1)
+    } else {
+      list.push(appId)
+    }
+    root.customPinnedApps = list
+    root.saveConfig()
+    root.rebuildDock()
+  }
+
+  function rebuildDock() {
+    var toplevels = []
+    try {
+      toplevels = ToplevelManager.toplevels.values
+    } catch (e) {
+      toplevels = []
+    }
+
+    var data = DockModel.buildDockItems(
+      toplevels,
+      DesktopEntries,
+      root.appLibrary,
+      Quickshell,
+      root.customPinnedApps
+    )
+    root.dockData = data
+
+    var pCount = data.pinned ? data.pinned.length : 0
+    var uCount = data.unpinned ? data.unpinned.length : 0
+    root.baselineGeometry = DockModel.computeBaselineCenters(
+      root.baseIconSize,
+      root.itemSpacing,
+      root.dockPadding,
+      pCount,
+      uCount
+    )
+
+    updateMagnification()
+  }
+
+  function handleItemDragStarted(index, itemData, sceneX, sceneY) {
+    if (dropSettleAnimation.running) {
+      dropSettleAnimation.stop()
+      root.finishDropReorder()
+    }
+    root.clearTooltip()
+    root.isDropSettling = false
+    root.draggingPinnedIndex = index
+    root.dragTargetIndex = index
+
+    var geo = root.baselineGeometry
+    if (!geo || !geo.pinned || index >= geo.pinned.length) return
+
+    var pt = dockCapsule.mapFromItem(null, sceneX, sceneY)
+    var slotCenterX = geo.pinned[index]
+    var slotCenterY = root.capsuleHeight - 5 - (root.iconPixelSize / 2)
+    root.dragGrabOffsetX = pt.x - slotCenterX
+    root.dragGrabOffsetY = pt.y - slotCenterY
+    root.dragVisualX = 0
+    root.dragVisualY = 0
+
+    // Magnification is suspended for the complete drag. Clearing these once
+    // avoids rebuilding arrays on every high-frequency pointer event.
+    root.launcherScale = 1.0
+    root.launcherOffsetX = 0
+    root.pinnedScales = []
+    root.unpinnedScales = []
+    root.pinnedOffsets = []
+    root.unpinnedOffsets = []
+
+    root.updateDragState(pt.x - root.dragGrabOffsetX)
+  }
+
+  function handleItemDragMoved(index, itemData, sceneX, sceneY) {
+    if (root.isDropSettling) return
+    var geo = root.baselineGeometry
+    if (!geo || !geo.pinned || index >= geo.pinned.length) return
+
+    var pt = dockCapsule.mapFromItem(null, sceneX, sceneY)
+    var slotCenterX = geo.pinned[index]
+    var slotCenterY = root.capsuleHeight - 5 - (root.iconPixelSize / 2)
+    root.dragVisualX = pt.x - slotCenterX - root.dragGrabOffsetX
+    root.dragVisualY = Math.max(-20, Math.min(8, pt.y - slotCenterY - root.dragGrabOffsetY))
+
+    root.updateDragState(pt.x - root.dragGrabOffsetX)
+  }
+
+  function updateDragState(currentCenterX) {
+    var geo = root.baselineGeometry
+    if (!geo || !geo.pinned || geo.pinned.length === 0) return
+
+    var fromIdx = root.draggingPinnedIndex
+    var pCenters = geo.pinned
+    var pCount = pCenters.length
+
+    var currentTarget = root.dragTargetIndex >= 0 ? root.dragTargetIndex : fromIdx
+    var slotWidth = root.baseIconSize + root.itemSpacing
+    var hysteresisMargin = slotWidth * 0.22 // ~10.5px directional deadzone to eliminate boundary jitter
+
+    var bestIdx = currentTarget
+    var bestDist = Math.abs(currentCenterX - pCenters[currentTarget]) - hysteresisMargin
+
+    for (var i = 0; i < pCount; i++) {
+      if (i === currentTarget) continue
+      var dist = Math.abs(currentCenterX - pCenters[i])
+      if (dist < bestDist) {
+        bestDist = dist
+        bestIdx = i
+      }
+    }
+    // The dragged icon follows the pointer every frame, but neighbor layout
+    // only changes when a slot boundary is crossed. Avoiding identical array
+    // assignments keeps the QML animation scheduler off the pointer hot path.
+    if (bestIdx === currentTarget && root.pinnedOffsets.length === pCount) return
+    root.dragTargetIndex = bestIdx
+
+    // Shift neighbor slots to preview the new layout
+    var pOffsets = []
+    var toIdx = root.dragTargetIndex
+
+    for (var j = 0; j < pCount; j++) {
+      if (j === fromIdx) {
+        pOffsets.push(0)
+      } else if (toIdx > fromIdx && j > fromIdx && j <= toIdx) {
+        pOffsets.push(-slotWidth)
+      } else if (toIdx < fromIdx && j >= toIdx && j < fromIdx) {
+        pOffsets.push(slotWidth)
+      } else {
+        pOffsets.push(0)
+      }
+    }
+    root.pinnedOffsets = pOffsets
+  }
+
+  function handleItemDragEnded(index, itemData, sourceItem) {
+    var fromIdx = root.draggingPinnedIndex
+    var toIdx = root.dragTargetIndex
+    var geo = root.baselineGeometry
+
+    if (fromIdx < 0 || !geo || !geo.pinned || fromIdx >= geo.pinned.length) {
+      root.draggingPinnedIndex = -1
+      root.dragTargetIndex = -1
+      root.dragVisualX = 0
+      root.dragVisualY = 0
+      root.dragGrabOffsetX = 0
+      root.dragGrabOffsetY = 0
+      root.pinnedOffsets = []
+      root.updateMagnification()
+      return
+    }
+
+    var targetIdx = (toIdx >= 0 && toIdx < geo.pinned.length) ? toIdx : fromIdx
+    root.dropSettleStartX = root.dragVisualX
+    root.dropSettleStartY = root.dragVisualY
+    // Distance from the starting slot center to the target slot center
+    root.dropSettleTargetX = geo.pinned[targetIdx] - geo.pinned[fromIdx]
+    root.dropSettleProgress = 0.0
+    root.isDropSettling = true
+    dropSettleAnimation.restart()
+  }
+
+  function finishDropReorder() {
+    root.isDropSettling = false
+    var fromIdx = root.draggingPinnedIndex
+    var toIdx = root.dragTargetIndex
+
+    root.draggingPinnedIndex = -1
+    root.dragTargetIndex = -1
+    root.dragVisualX = 0
+    root.dragVisualY = 0
+    root.dragGrabOffsetX = 0
+    root.dragGrabOffsetY = 0
+
+    if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) {
+      root.reorderPinnedApps(fromIdx, toIdx)
+    } else {
+      root.pinnedOffsets = []
+      root.updateMagnification()
+    }
+  }
+
+  function reorderPinnedApps(fromIndex, toIndex) {
+    var currentList = Array.isArray(root.customPinnedApps)
+      ? root.customPinnedApps.slice()
+      : DockModel.defaultPinnedApps.slice()
+
+    if (fromIndex < 0 || fromIndex >= currentList.length || toIndex < 0 || toIndex >= currentList.length) {
+      root.pinnedOffsets = []
+      root.updateMagnification()
+      return
+    }
+
+    var moved = currentList.splice(fromIndex, 1)[0]
+    currentList.splice(toIndex, 0, moved)
+
+    root.customPinnedApps = currentList
+    root.saveConfig()
+    root.rebuildDock()
+  }
+
+  function updateMagnification() {
+    if (root.draggingPinnedIndex >= 0) return
+    if (!root.isDockHovered || root.hoverCursorX < 0) {
+      root.launcherScale = 1.0
+      root.launcherOffsetX = 0
+      root.pinnedScales = []
+      root.unpinnedScales = []
+      root.pinnedOffsets = []
+      root.unpinnedOffsets = []
+      return
+    }
+
+    var geo = root.baselineGeometry
+    if (!geo) return
+
+    // Capsule width and item slots stay fixed, so pointer coordinates already
+    // map to the invariant resting geometry without feedback compensation.
+    var baseCursorX = root.hoverCursorX
+
+    // Applications launcher scale
+    root.launcherScale = DockModel.scaleFromDistance(
+      Math.abs(baseCursorX - geo.launcher),
+      root.maxMagnification,
+      root.magnifyRadius
+    )
+
+    // Pinned items scales
+    var pScales = []
+    for (var p = 0; p < geo.pinned.length; p++) {
+      pScales.push(DockModel.scaleFromDistance(
+        Math.abs(baseCursorX - geo.pinned[p]),
+        root.maxMagnification,
+        root.magnifyRadius
+      ))
+    }
+    root.pinnedScales = pScales
+
+    // Unpinned items scales
+    var uScales = []
+    for (var u = 0; u < geo.unpinned.length; u++) {
+      uScales.push(DockModel.scaleFromDistance(
+        Math.abs(baseCursorX - geo.unpinned[u]),
+        root.maxMagnification,
+        root.magnifyRadius
+      ))
+    }
+    root.unpinnedScales = uScales
+
+    var allScales = [root.launcherScale].concat(pScales).concat(uScales)
+    var offsets = DockModel.computeMagnifiedOffsets(
+      allScales,
+      root.baseIconSize,
+      root.layoutExpansionRatio
+    )
+    root.launcherOffsetX = offsets.length > 0 ? offsets[0] : 0
+    root.pinnedOffsets = offsets.slice(1, 1 + pScales.length)
+    root.unpinnedOffsets = offsets.slice(1 + pScales.length)
+  }
+
+  // Reactive listeners for window and app changes
+  Connections {
+    target: ToplevelManager.toplevels
+    function onValuesChanged() { root.rebuildDock() }
+  }
+
+  Connections {
+    target: ToplevelManager
+    function onActiveToplevelChanged() { root.rebuildDock() }
+  }
+
+  Connections {
+    target: DesktopEntries.applications
+    function onValuesChanged() { root.rebuildDock() }
+  }
+
+  Connections {
+    target: root.appLibrary
+    function onAppsChanged() { root.rebuildDock() }
+  }
+
+  Component.onCompleted: {
+    console.log("macOS dock instance ready", root.dockScreen ? root.dockScreen.name : "no-screen")
+    if (root.appLibrary) root.appLibrary.refreshIcons()
+    root.rebuildDock()
+  }
+
+  // macOS Dock Panel Window
+  PanelWindow {
+    id: dockPanel
+    visible: true
+    screen: root.dockScreen
+
+    anchors {
+      bottom: true
+      left: true
+      right: true
+    }
+
+    margins {
+      bottom: 0
+    }
+
+    implicitWidth: 0
+    implicitHeight: root.capsuleHeight
+      + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0))
+      + 16
+    color: "transparent"
+
+    WlrLayershell.namespace: "omarchy-dock"
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+    
+    // Reserve bottom space so Hyprland windows stop cleanly above the dock
+    exclusionMode: root.reserveSpace && !root.autoHide
+      ? ExclusionMode.Normal
+      : ExclusionMode.Ignore
+    exclusiveZone: root.capsuleHeight + 10
+
+    // Single dynamic hit area bound directly to mask so Quickshell updates
+    // the Wayland input region on geometry changes without nested region issues.
+    Item {
+      id: dockHitArea
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.bottom: parent.bottom
+      width: (!root.autoHide || root.dockPresented)
+        ? (dockCapsule.width + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0) * 2) + 8)
+        : (root.autoHide ? parent.width : 0)
+      height: (!root.autoHide || root.dockPresented)
+        ? (root.capsuleHeight + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0)) + 14)
+        : (root.autoHide ? 3 : 0)
+    }
+
+    mask: Region {
+      item: dockHitArea
+    }
+
+    // A separate popup surface can rise above the layer window without being
+    // clipped by its compact exclusive-zone height.
+    PopupWindow {
+      id: tooltipWindow
+      visible: root.tooltipVisible
+        && root.tooltipTarget !== null
+        && root.tooltipText !== ""
+      color: "transparent"
+      implicitWidth: Math.ceil(tooltipBubble.implicitWidth)
+      implicitHeight: Math.ceil(tooltipBubble.implicitHeight)
+
+      anchor {
+        window: dockPanel
+        adjustment: PopupAdjustment.Slide
+        edges: Edges.Top | Edges.Left
+        gravity: Edges.Bottom | Edges.Right
+        rect.width: 1
+        rect.height: 1
+
+        onAnchoring: {
+          var target = root.tooltipTarget
+          if (!target) return
+          try {
+            var localX = target.width / 2 - tooltipWindow.implicitWidth / 2
+            var localY = -tooltipWindow.implicitHeight - 10
+            var point = dockPanel.contentItem.mapFromItem(target, localX, localY)
+            tooltipWindow.anchor.rect.x = Math.round(point.x)
+            tooltipWindow.anchor.rect.y = Math.round(point.y)
+          } catch (e) {}
+        }
+      }
+
+      Rectangle {
+        id: tooltipBubble
+        implicitWidth: tooltipLabel.implicitWidth + 18
+        implicitHeight: tooltipLabel.implicitHeight + 10
+        radius: 7
+        color: Util.alpha(Color.background, 0.94)
+        border.color: Util.alpha(Color.foreground, 0.2)
+        border.width: 1
+
+        Text {
+          id: tooltipLabel
+          anchors.centerIn: parent
+          text: root.tooltipText
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          color: Color.foreground
+        }
+      }
+    }
+
+    PopupWindow {
+      id: contextWindow
+      visible: root.contextMenuOpen && root.contextAnchor !== null
+      color: "transparent"
+      implicitWidth: dockContextMenu.width
+      implicitHeight: dockContextMenu.height
+
+      anchor {
+        window: dockPanel
+        adjustment: PopupAdjustment.Slide
+        edges: Edges.Top | Edges.Left
+        gravity: Edges.Bottom | Edges.Right
+        rect.width: 1
+        rect.height: 1
+
+        onAnchoring: {
+          var target = root.contextAnchor
+          if (!target) return
+          try {
+            var localX = target.width / 2 - contextWindow.implicitWidth / 2
+            var localY = -contextWindow.implicitHeight - 10
+            var point = dockPanel.contentItem.mapFromItem(target, localX, localY)
+            contextWindow.anchor.rect.x = Math.round(point.x)
+            contextWindow.anchor.rect.y = Math.round(point.y)
+          } catch (e) {}
+        }
+      }
+
+      DockContextMenu {
+        id: dockContextMenu
+        targetItem: root.contextTarget
+        isOpen: root.contextMenuOpen
+        isAutoHide: root.autoHide
+        isReserveSpace: root.reserveSpace
+
+        onLaunchClicked: function(item) {
+          DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
+        }
+        onPinToggled: function(item) {
+          if (item && item.id) root.togglePinApp(item.id)
+        }
+        onQuitClicked: function(item) {
+          DockModel.closeAppWindow(item)
+        }
+        onAutoHideToggled: {
+          root.autoHide = !root.autoHide
+          root.saveConfig()
+        }
+        onReserveSpaceToggled: {
+          root.reserveSpace = !root.reserveSpace
+          root.saveConfig()
+        }
+        onMenuClosed: root.closeContextMenu()
+      }
+    }
+
+    Item {
+      id: edgeRevealArea
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      height: root.autoHide ? 3 : 0
+
+      HoverHandler {
+        onHoveredChanged: {
+          root.edgeHovered = hovered
+          if (hovered) {
+            root.revealDock()
+          } else {
+            edgeRevealTimer.stop()
+            root.scheduleDockHide()
+          }
+        }
+        onPointChanged: {
+          if (hovered && root.autoHide && !root.dockPresented) {
+            root.revealDock()
+          }
+        }
+      }
+    }
+
+    Item {
+      id: dockInteractionRegion
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.bottom: parent.bottom
+      width: dockCapsule.width
+        + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0) * 2)
+        + 8
+      height: root.capsuleHeight
+        + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0))
+        + 14
+
+      Item {
+        id: dockInputRegion
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        width: (!root.autoHide || root.dockPresented) ? parent.width : 0
+        height: (!root.autoHide || root.dockPresented) ? parent.height : 0
+        visible: !root.autoHide || root.dockPresented
+      }
+
+      // The capsule and its hit envelope share this parent. When reveal swaps
+      // input from the thin edge to the dock, hover ownership transfers inside
+      // one subtree instead of briefly exiting the panel.
+      HoverHandler {
+        id: dockHover
+        enabled: !root.autoHide || root.dockPresented
+        onHoveredChanged: {
+          root.isDockHovered = hovered
+          if (hovered) {
+            root.revealDock()
+          } else {
+            root.hoverCursorX = -1
+            root.clearTooltip()
+            root.updateMagnification()
+            root.scheduleDockHide()
+          }
+        }
+        onPointChanged: {
+          if (hovered) {
+            var local = dockCapsule.mapFromItem(
+              dockInteractionRegion,
+              point.position.x,
+              point.position.y
+            )
+            root.isDockHovered = true
+            root.hoverCursorX = local.x
+            root.updateMagnification()
+          }
+        }
+      }
+
+      // macOS Frosted Glass Dock Capsule
+      Rectangle {
+        id: dockCapsule
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 4
+
+      height: root.capsuleHeight
+      width: contentRow.width + root.dockPadding * 2
+      radius: 18
+      transform: Translate {
+        y: root.autoHide && !root.dockPresented ? root.capsuleHeight + 8 : 0
+        Behavior on y {
+          NumberAnimation {
+            duration: root.reduceMotion ? 0 : 80
+            easing.type: Easing.OutCubic
+          }
+        }
+      }
+
+      // Frosted Glass Appearance matching Omarchy theme
+      color: Util.alpha(Color.background, 0.76)
+      border.color: Util.alpha(Color.foreground, 0.16)
+      border.width: 1
+
+      // Top Specular Highlight for 3D glass effect
+      Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.margins: 1
+        height: 1
+        radius: 18
+        color: Util.alpha("#ffffff", 0.16)
+      }
+
+      // Main Items Content Row
+      Row {
+        id: contentRow
+        anchors.centerIn: parent
+        spacing: root.itemSpacing
+
+        // Application launcher (same action as SUPER + ALT + SPACE)
+        Item {
+          id: launcherItem
+          width: root.baseIconSize
+          height: root.baseIconSize
+          z: root.animatedLauncherScale
+
+          Item {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 5
+            width: root.iconPixelSize
+            height: root.iconPixelSize
+            transformOrigin: Item.Bottom
+            scale: root.animatedLauncherScale
+            transform: Translate { x: root.animatedLauncherOffsetX }
+
+            Rectangle {
+              anchors.fill: parent
+              radius: 10
+              color: launcherMouse.containsMouse
+                ? Util.alpha(Color.accent, 0.25)
+                : Util.alpha(Color.foreground, 0.08)
+
+              Text {
+                anchors.centerIn: parent
+                text: "󰀻"
+                font.family: Style.font.family
+                font.pixelSize: 20
+                color: Color.accent
+              }
+            }
+
+            MouseArea {
+              id: launcherMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              acceptedButtons: Qt.LeftButton
+
+              onEntered: root.requestTooltip(launcherItem, "Applications")
+              onExited: root.releaseTooltip(launcherItem)
+              onClicked: Util.execDetached("omarchy-menu toggle apps")
+            }
+          }
+        }
+
+        Rectangle {
+          anchors.verticalCenter: parent.verticalCenter
+          width: 1
+          height: root.iconPixelSize * 0.65
+          color: Util.alpha(Color.foreground, 0.16)
+        }
+
+        // Pinned Apps
+        Repeater {
+          id: pinnedRepeater
+          model: root.dockData.pinned
+
+          delegate: DockItem {
+            required property var modelData
+            required property int index
+
+            itemData: modelData
+            itemIndex: index
+            baseSize: root.baseIconSize
+            iconSize: root.iconPixelSize
+            isDockHovered: root.isDockHovered
+            magnificationDuration: root.magnificationDuration
+            reduceMotion: root.reduceMotion
+            isBeingDragged: root.draggingPinnedIndex === index
+            isReordering: root.draggingPinnedIndex >= 0
+            dragVisualX: root.draggingPinnedIndex === index ? root.dragVisualX : 0
+            dragVisualY: root.draggingPinnedIndex === index ? root.dragVisualY : 0
+            targetScale: (Array.isArray(root.pinnedScales) && index < root.pinnedScales.length) ? root.pinnedScales[index] : 1.0
+            targetOffsetX: (Array.isArray(root.pinnedOffsets) && index < root.pinnedOffsets.length) ? root.pinnedOffsets[index] : 0
+
+            onClicked: function(item) {
+              DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
+            }
+
+            onPinToggleRequested: function(item) {
+              if (item && item.id) {
+                root.togglePinApp(item.id)
+              }
+            }
+
+            onCloseRequested: function(item) {
+              DockModel.closeAppWindow(item)
+            }
+
+            onContextMenuRequested: function(item, srcItem) {
+              root.openContextMenu(item, srcItem)
+            }
+
+            onHovered: function(item, srcItem) {
+              if (root.draggingPinnedIndex >= 0) return
+              root.requestTooltip(srcItem, item ? String(item.name || "") : "")
+            }
+
+            onUnhovered: function(srcItem) {
+              root.releaseTooltip(srcItem)
+            }
+
+            onDragStarted: function(idx, item, sceneX, sceneY) {
+              root.handleItemDragStarted(idx, item, sceneX, sceneY)
+            }
+
+            onDragMoved: function(idx, item, sceneX, sceneY) {
+              root.handleItemDragMoved(idx, item, sceneX, sceneY)
+            }
+
+            onDragEnded: function(idx, item, srcItem) {
+              root.handleItemDragEnded(idx, item, srcItem)
+            }
+          }
+        }
+
+        // Separator between pinned and unpinned running apps
+        Rectangle {
+          visible: (root.dockData.pinned && root.dockData.pinned.length > 0)
+            && (root.dockData.unpinned && root.dockData.unpinned.length > 0)
+          anchors.verticalCenter: parent.verticalCenter
+          width: 1
+          height: root.iconPixelSize * 0.65
+          color: Util.alpha(Color.foreground, 0.16)
+        }
+
+        // Unpinned Running Apps
+        Repeater {
+          id: unpinnedRepeater
+          model: root.dockData.unpinned
+
+          delegate: DockItem {
+            required property var modelData
+            required property int index
+
+            itemData: modelData
+            itemIndex: (root.dockData.pinned ? root.dockData.pinned.length : 0) + index
+            baseSize: root.baseIconSize
+            iconSize: root.iconPixelSize
+            isDockHovered: root.isDockHovered
+            magnificationDuration: root.magnificationDuration
+            reduceMotion: root.reduceMotion
+            targetScale: (Array.isArray(root.unpinnedScales) && index < root.unpinnedScales.length) ? root.unpinnedScales[index] : 1.0
+            targetOffsetX: (Array.isArray(root.unpinnedOffsets) && index < root.unpinnedOffsets.length) ? root.unpinnedOffsets[index] : 0
+
+            onClicked: function(item) {
+              DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
+            }
+
+            onPinToggleRequested: function(item) {
+              if (item && item.id) {
+                root.togglePinApp(item.id)
+              }
+            }
+
+            onCloseRequested: function(item) {
+              DockModel.closeAppWindow(item)
+            }
+
+            onContextMenuRequested: function(item, srcItem) {
+              root.openContextMenu(item, srcItem)
+            }
+
+            onHovered: function(item, srcItem) {
+              root.requestTooltip(srcItem, item ? String(item.name || "") : "")
+            }
+
+            onUnhovered: function(srcItem) {
+              root.releaseTooltip(srcItem)
+            }
+          }
+        }
+      }
+
+      }
+    }
+  }
+}
