@@ -7,8 +7,7 @@
   "license": "MIT",
   "description": "Authentic macOS-style floating dock for Omarchy featuring pointer-coupled magnification wave, launch bounce animation, drag-and-drop reordering, and auto-hide.",
   "kinds": [
-    "panel",
-    "menu"
+    "panel"
   ],
   "keepLoaded": true,
   "entryPoints": {

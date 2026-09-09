@@ -25,7 +25,8 @@ function toArray(values) {
   return result;
 }
 
-var commonSuffixes = /-(stable|bin|git|oss|browser|desktop|nightly|beta|dev|electron|community|preview)$/i;
+// Preserve release channels: separate installations must not share windows or pins.
+var commonSuffixes = /-(stable|bin|git|oss|browser|desktop|electron|community)$/i;
 
 function cleanAppId(id) {
   if (!id) return "";
@@ -218,7 +219,7 @@ function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, custo
   }
 
   // Group remaining unpinned running windows
-  var runningMap = {};
+  var runningMap = Object.create(null);
   var runningOrder = [];
 
   for (var k = 0; k < windowList.length; k++) {

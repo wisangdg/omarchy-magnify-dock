@@ -2,6 +2,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const os = require("node:os");
+const { spawnSync } = require("node:child_process");
 
 const directory = path.join(__dirname, "..");
 const model = {};
@@ -86,4 +88,60 @@ const winB = { activated: false, activate() { activatedIndex = 1; } };
 model.handleItemClick({ isRunning: true, windows: [winA, winB] });
 assert.equal(activatedIndex, 1, "clicking active app with multiple windows cycles to next window");
 
+// Release channels must remain distinct when matching, grouping, and pinning.
+for (const channel of ["beta", "dev", "nightly", "preview"]) {
+  assert.equal(model.matchApp("google-chrome", `google-chrome-${channel}`), false);
+}
+const browserEntries = ["google-chrome", "google-chrome-beta"].map(id => ({
+  id, name: id, command: [id],
+}));
+const desktopEntries = { byId: id => browserEntries.find(entry => entry.id === id) };
+const browserWindows = browserEntries.map(entry => ({ appId: entry.id }));
+const browsers = model.buildDockItems(browserWindows, desktopEntries, null, null,
+  browserEntries.map(entry => entry.id));
+assert.deepEqual(Array.from(browsers.pinned, item => item.windows[0].appId),
+  ["google-chrome", "google-chrome-beta"]);
+const unpinnedBrowsers = model.buildDockItems(browserWindows, desktopEntries, null, null, []);
+assert.equal(unpinnedBrowsers.unpinned.length, 2);
+root.customPinnedApps = ["google-chrome"];
+toggle(root, model, "google-chrome-beta");
+assert.deepEqual(root.customPinnedApps, ["google-chrome", "google-chrome-beta"]);
+
+// App IDs may coincide with Object.prototype property names.
+const unusualApps = model.buildDockItems([
+  { appId: "constructor" }, { appId: "constructor" }, { appId: "__proto__" },
+], null, null, null, []);
+assert.deepEqual(Array.from(unusualApps.unpinned, item => [item.id, item.windowCount]),
+  [["constructor", 2], ["__proto__", 1]]);
+
+// Execute the real save handler against a temporary path, including shell metacharacters.
+const save = handler("saveConfig", "togglePinApp", ["Util"]);
+const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "dock-save-test-"));
+try {
+  const configPath = path.join(tempDirectory, "dock's settings.json");
+  const state = {
+    configPath, autoHide: true, reserveSpace: false,
+    customPinnedApps: ["app's-id", "$(touch UNEXPECTED)", "`touch UNEXPECTED`"],
+  };
+  const util = {
+    shellQuote: value => "'" + value.replace(/'/g, "'\\''") + "'",
+    execDetached(command) {
+      const result = spawnSync("sh", ["-c", command], { encoding: "utf8", cwd: tempDirectory });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stderr, "");
+    },
+  };
+  for (const pins of [state.customPinnedApps, []]) {
+    state.customPinnedApps = pins;
+    save(state, model, util);
+    assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), {
+      version: 1, autoHide: true, reserveSpace: false, pinned: pins,
+    });
+    assert.deepEqual(fs.readdirSync(tempDirectory), [path.basename(configPath)]);
+  }
+} finally {
+  fs.rmSync(tempDirectory, { recursive: true, force: true });
+}
+
 console.log("PASS: empty pins survive unpin/reload/reorder; running apps remain visible; close targets one window only; terminals distinct; no substring collisions; no vendor false positives; window cycling works.");
+console.log("PASS: release channels stay separate; prototype app IDs work; settings persist through the real shell command.");

@@ -328,7 +328,7 @@ Item {
     var jsonStr = JSON.stringify(payload, null, 2)
     if (Util && typeof Util.execDetached === "function") {
       var tmpPath = root.configPath + ".tmp." + Date.now()
-      var cmd = "cat << 'JSONEOF' > " + Util.shellQuote(tmpPath) + "\n" + jsonStr + "\nJSONEOF && mv " + Util.shellQuote(tmpPath) + " " + Util.shellQuote(root.configPath)
+      var cmd = "printf '%s\\n' " + Util.shellQuote(jsonStr) + " > " + Util.shellQuote(tmpPath) + " && mv " + Util.shellQuote(tmpPath) + " " + Util.shellQuote(root.configPath)
       Util.execDetached(cmd)
     }
   }
