@@ -55,6 +55,8 @@ Item {
   property var unpinnedScales: []
   property var pinnedOffsets: []
   property var unpinnedOffsets: []
+  property real extraCapsuleWidth: 0
+  property real animatedExtraCapsuleWidth: root.extraCapsuleWidth
 
   // Track fast pointer updates without restarting a discrete animation for
   // every event. This keeps the velocity continuous while entering, moving
@@ -68,6 +70,14 @@ Item {
   }
 
   Behavior on animatedLauncherOffsetX {
+    SmoothedAnimation {
+      velocity: -1
+      duration: root.reduceMotion ? 0 : root.magnificationDuration
+      maximumEasingTime: root.reduceMotion ? 0 : 28
+    }
+  }
+
+  Behavior on animatedExtraCapsuleWidth {
     SmoothedAnimation {
       velocity: -1
       duration: root.reduceMotion ? 0 : root.magnificationDuration
@@ -240,9 +250,9 @@ Item {
 
   Timer {
     id: hideDockTimer
-    interval: 30
+    interval: 220
     onTriggered: {
-      if (root.autoHide && !root.isDockHovered && !root.contextMenuOpen) {
+      if (root.autoHide && !root.isDockHovered && !root.edgeHovered && !root.contextMenuOpen) {
         root.clearTooltip()
         root.hoverCursorX = -1
         root.updateMagnification()
@@ -317,8 +327,9 @@ Item {
     }
     var jsonStr = JSON.stringify(payload, null, 2)
     if (Util && typeof Util.execDetached === "function") {
-      var cmd = "cat << 'JSONEOF' > " + Util.shellQuote(root.configPath) + "\n" + jsonStr + "\nJSONEOF"
-      Util.execDetached("bash -c " + Util.shellQuote(cmd))
+      var tmpPath = root.configPath + ".tmp." + Date.now()
+      var cmd = "cat << 'JSONEOF' > " + Util.shellQuote(tmpPath) + "\n" + jsonStr + "\nJSONEOF && mv " + Util.shellQuote(tmpPath) + " " + Util.shellQuote(root.configPath)
+      Util.execDetached(cmd)
     }
   }
 
@@ -406,6 +417,7 @@ Item {
     root.unpinnedScales = []
     root.pinnedOffsets = []
     root.unpinnedOffsets = []
+    root.extraCapsuleWidth = 0
 
     root.updateDragState(pt.x - root.dragGrabOffsetX)
   }
@@ -546,6 +558,7 @@ Item {
       root.unpinnedScales = []
       root.pinnedOffsets = []
       root.unpinnedOffsets = []
+      root.extraCapsuleWidth = 0
       return
     }
 
@@ -594,6 +607,7 @@ Item {
     root.launcherOffsetX = offsets.length > 0 ? offsets[0] : 0
     root.pinnedOffsets = offsets.slice(1, 1 + pScales.length)
     root.unpinnedOffsets = offsets.slice(1 + pScales.length)
+    root.extraCapsuleWidth = (typeof offsets.totalExtra === "number") ? offsets.totalExtra : 0
   }
 
   // Reactive listeners for window and app changes
@@ -663,10 +677,10 @@ Item {
       anchors.bottom: parent.bottom
       width: (!root.autoHide || root.dockPresented)
         ? (dockCapsule.width + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0) * 2) + 8)
-        : (root.autoHide ? parent.width : 0)
+        : (root.autoHide ? (dockCapsule.width + 160) : 0)
       height: (!root.autoHide || root.dockPresented)
         ? (root.capsuleHeight + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0)) + 14)
-        : (root.autoHide ? 3 : 0)
+        : (root.autoHide ? 4 : 0)
     }
 
     mask: Region {
@@ -696,7 +710,8 @@ Item {
           var target = root.tooltipTarget
           if (!target) return
           try {
-            var localX = target.width / 2 - tooltipWindow.implicitWidth / 2
+            var targetOffset = Number(target.animatedOffsetX || 0)
+            var localX = target.width / 2 - tooltipWindow.implicitWidth / 2 + targetOffset
             var localY = -tooltipWindow.implicitHeight - 10
             var point = dockPanel.contentItem.mapFromItem(target, localX, localY)
             tooltipWindow.anchor.rect.x = Math.round(point.x)
@@ -745,7 +760,8 @@ Item {
           var target = root.contextAnchor
           if (!target) return
           try {
-            var localX = target.width / 2 - contextWindow.implicitWidth / 2
+            var targetOffset = Number(target.animatedOffsetX || 0)
+            var localX = target.width / 2 - contextWindow.implicitWidth / 2 + targetOffset
             var localY = -contextWindow.implicitHeight - 10
             var point = dockPanel.contentItem.mapFromItem(target, localX, localY)
             contextWindow.anchor.rect.x = Math.round(point.x)
@@ -784,10 +800,10 @@ Item {
 
     Item {
       id: edgeRevealArea
-      anchors.left: parent.left
-      anchors.right: parent.right
+      anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: parent.bottom
-      height: root.autoHide ? 3 : 0
+      width: dockCapsule.width + 160
+      height: root.autoHide ? 4 : 0
 
       HoverHandler {
         onHoveredChanged: {
@@ -846,13 +862,10 @@ Item {
         }
         onPointChanged: {
           if (hovered) {
-            var local = dockCapsule.mapFromItem(
-              dockInteractionRegion,
-              point.position.x,
-              point.position.y
-            )
+            var centerDelta = point.position.x - (dockInteractionRegion.width / 2)
+            var baseWidth = root.baselineGeometry ? root.baselineGeometry.totalBaseWidth : dockCapsule.width
             root.isDockHovered = true
-            root.hoverCursorX = local.x
+            root.hoverCursorX = (baseWidth / 2) + centerDelta
             root.updateMagnification()
           }
         }
@@ -866,7 +879,7 @@ Item {
         anchors.bottomMargin: 4
 
       height: root.capsuleHeight
-      width: contentRow.width + root.dockPadding * 2
+      width: contentRow.width + root.dockPadding * 2 + root.animatedExtraCapsuleWidth
       radius: 18
       transform: Translate {
         y: root.autoHide && !root.dockPresented ? root.capsuleHeight + 8 : 0

@@ -25,28 +25,27 @@ function toArray(values) {
   return result;
 }
 
-function normalizeId(id) {
-  if (!id) return "";
-  return String(id)
-    .toLowerCase()
-    .replace(/\.desktop$/i, "")
-    .replace(/^(org|dev|com|io|net)\.[^.]+\./i, "")
-    .replace(/[^a-z0-9]/g, "");
-}
+var commonSuffixes = /-(stable|bin|git|oss|browser|desktop|nightly|beta|dev|electron|community|preview)$/i;
 
-function tokenizeAppId(id) {
-  if (!id) return [];
-  var generic = ["org", "com", "dev", "io", "net", "bin", "app", "apps", "desktop", "linux", "stable", "browser", "git", "ui"];
-  var raw = String(id).toLowerCase().replace(/\.desktop$/i, "");
-  var parts = raw.split(/[^a-z0-9]+/);
-  var tokens = [];
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i];
-    if (p.length >= 3 && generic.indexOf(p) === -1) {
-      tokens.push(p);
+function cleanAppId(id) {
+  if (!id) return "";
+  var s = String(id).trim().toLowerCase().replace(/\.desktop$/i, "");
+  // For reverse-DNS identifiers (e.g. org.gnome.Nautilus, io.github.user.app, dev.zed.Zed, com.spotify.Client)
+  if (s.indexOf(".") !== -1) {
+    var parts = s.split(".");
+    var last = parts[parts.length - 1];
+    if ((last === "client" || last === "desktop" || last === "app" || last === "ui") && parts.length > 2) {
+      s = parts[parts.length - 2];
+    } else {
+      s = last;
     }
   }
-  return tokens;
+  return s.replace(commonSuffixes, "").replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeId(id) {
+  if (!id) return "";
+  return cleanAppId(id) || String(id).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function matchApp(appIdA, appIdB) {
@@ -56,12 +55,10 @@ function matchApp(appIdA, appIdB) {
   if (!a || !b) return false;
   if (a === b) return true;
 
-  // Token-based matching for hyphenated or dotted variants (e.g. vivaldi-stable vs vivaldi, code-oss vs code)
-  var tokensA = tokenizeAppId(appIdA);
-  var tokensB = tokenizeAppId(appIdB);
-  for (var i = 0; i < tokensA.length; i++) {
-    if (tokensB.indexOf(tokensA[i]) !== -1) return true;
-  }
+  // Exact raw compare without .desktop
+  var rawA = String(appIdA).toLowerCase().replace(/\.desktop$/i, "");
+  var rawB = String(appIdB).toLowerCase().replace(/\.desktop$/i, "");
+  if (rawA === rawB) return true;
 
   // Terminal aliases & generic fallback
   var termNames = ["alacritty", "kitty", "ghostty", "foot", "terminal", "orgomarchyagent", "agent"];
@@ -85,9 +82,16 @@ function entryAliases(entry, fallbackId) {
   aliases.push(entry.startupClass || "");
   aliases.push(entry.name || "");
 
+  var genericExes = ["python", "python3", "bash", "sh", "flatpak", "uwsm", "uwsm-app", "electron"];
   var command = toArray(entry.command);
-  if (command.length > 0) aliases.push(command[0]);
-  if (entry.execString) aliases.push(String(entry.execString).split(/\s+/)[0]);
+  if (command.length > 0) {
+    var cmdExe = String(command[0]).replace(/^.*\//, "");
+    if (genericExes.indexOf(cmdExe) === -1) aliases.push(cmdExe);
+  }
+  if (entry.execString) {
+    var rawExe = String(entry.execString).split(/\s+/)[0].replace(/^.*\//, "");
+    if (genericExes.indexOf(rawExe) === -1) aliases.push(rawExe);
+  }
   return aliases;
 }
 
@@ -187,6 +191,7 @@ function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, custo
     var isFocused = false;
 
     for (var w = 0; w < windowList.length; w++) {
+      if (matchedWindows[w]) continue;
       var win = windowList[w];
       if (!win) continue;
       if (entryMatchesWindow(entry, pinId, win)) {
@@ -226,6 +231,7 @@ function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, custo
     if (!rawAppId) continue;
     var dEntry = findDesktopEntry(desktopEntries, rawAppId);
     var normKey = normalizeId((dEntry && dEntry.id) ? dEntry.id : rawAppId);
+    if (!normKey) normKey = rawAppId || ("win_" + k);
 
     if (!runningMap[normKey]) {
       var name = (dEntry && dEntry.name) ? dEntry.name : (toplevel.title || rawAppId);
@@ -287,16 +293,30 @@ function handleItemClick(item, Util, appLibrary, desktopEntries) {
 
   if (item.isRunning && item.windows && item.windows.length > 0) {
     var windows = item.windows;
-    // Match the Dock: clicking a running app brings it forward. If one of its
-    // windows is already active, leave the app in place instead of cycling
-    // through windows on every click.
+    var activeIdx = -1;
     for (var i = 0; i < windows.length; i++) {
       if (windows[i] && windows[i].activated) {
-        return;
+        activeIdx = i;
+        break;
       }
     }
-    if (windows[0] && typeof windows[0].activate === "function") {
-      windows[0].activate();
+    // If one of its windows is already active:
+    // - If multiple windows exist, cycle to the next window.
+    // - If only 1 window exists, leave it in place.
+    if (activeIdx !== -1) {
+      if (windows.length > 1) {
+        var nextIdx = (activeIdx + 1) % windows.length;
+        if (windows[nextIdx] && typeof windows[nextIdx].activate === "function") {
+          windows[nextIdx].activate();
+        }
+      }
+      return;
+    }
+    for (var j = 0; j < windows.length; j++) {
+      if (windows[j] && typeof windows[j].activate === "function") {
+        windows[j].activate();
+        return;
+      }
     }
     return;
   }
@@ -371,6 +391,7 @@ function computeMagnifiedOffsets(scales, baseSize, expansionRatio) {
     offsets.push(cursor + extras[j] / 2);
     cursor += extras[j];
   }
+  offsets.totalExtra = totalExtra;
   return offsets;
 }
 
