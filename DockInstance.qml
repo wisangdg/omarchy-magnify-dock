@@ -299,7 +299,6 @@ Item {
     root.contextTarget = item
     root.contextAnchor = target
     root.contextMenuOpenedAt = Date.now()
-    root.probeAppAudioStatus(item)
     root.revealDock()
     Qt.callLater(function() {
       if (root.contextAnchor !== target) return
@@ -410,9 +409,6 @@ Item {
         var parsed = JSON.parse(rawText)
         if (parsed && typeof parsed === "object") {
           root.mutedAppsMap = parsed
-          if (typeof dockContextMenu !== "undefined" && dockContextMenu && root.contextTarget) {
-            dockContextMenu.isAudioMuted = root.isAppAudioMuted(root.contextTarget)
-          }
           return
         }
       }
@@ -439,37 +435,20 @@ Item {
     if (!item) return
     var appId = String(item.id || "")
     var appName = String(item.name || "")
+    // Update the intent map before the script runs so the sync timer stops
+    // immediately on unmute; otherwise it can re-mute the stream in the gap
+    // before the persisted file is reloaded.
+    var next = Object.assign({}, root.mutedAppsMap)
+    if (root.isAppAudioMuted(item)) {
+      if (appId) delete next[appId]
+      if (appName) delete next[appName]
+    } else {
+      if (appId) next[appId] = true
+      if (appName) next[appName] = true
+    }
+    root.mutedAppsMap = next
     var cmd = "python3 " + Util.shellQuote(root.dockAudioScript) + " toggle " + Util.shellQuote(appId) + " " + Util.shellQuote(appName)
     Util.execDetached(cmd)
-  }
-
-  Process {
-    id: audioStatusProc
-    command: []
-    stdout: SplitParser {
-      onRead: function(line) {
-        try {
-          var data = JSON.parse(line)
-          if (data && typeof data.is_muted === "boolean") {
-            var key = data.app_id || data.app_name
-            if (key) {
-              var next = Object.assign({}, root.mutedAppsMap)
-              if (data.is_muted) next[key] = true
-              else delete next[key]
-              root.mutedAppsMap = next
-            }
-          }
-        } catch (e) {}
-      }
-    }
-  }
-
-  function probeAppAudioStatus(item) {
-    if (!item || audioStatusProc.running) return
-    var appId = String(item.id || "")
-    var appName = String(item.name || "")
-    audioStatusProc.command = ["python3", root.dockAudioScript, "status", appId, appName]
-    audioStatusProc.running = true
   }
 
   // A saved mute must also cover streams that appear after the menu action,

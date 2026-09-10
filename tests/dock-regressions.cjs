@@ -237,4 +237,7 @@ assert.equal(typeof statusOut.is_muted, "boolean");
 const syncOut = JSON.parse(spawnSync("python3", [scriptPath, "sync"], { encoding: "utf8" }).stdout);
 assert.equal(typeof syncOut.synced, "number");
 
+const audioEdge = spawnSync("python3", [path.join(directory, "tests", "test_dock_audio.py")], { encoding: "utf8" });
+assert.equal(audioEdge.status, 0, audioEdge.stdout + audioEdge.stderr);
+
 console.log("PASS: per-app audio mute state works; dock-audio.py CLI verified.");

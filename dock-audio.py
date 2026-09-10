@@ -26,6 +26,30 @@ def normalize_name(s):
     return re.sub(r"[^a-z0-9]", "", s)
 
 
+# Tokens too generic to identify an application. Matching them would let
+# unrelated streams cross-match ("desktop", reverse-DNS prefixes, ...).
+GENERIC_TOKENS = {
+    "org", "com", "io", "net", "github", "gitlab", "gnome", "kde", "xfce",
+    "app", "apps", "linux", "desktop", "stable", "bin", "git", "oss",
+    "browser", "electron", "client", "native", "web", "preview", "beta",
+    "dev", "nightly", "the",
+}
+
+
+def name_tokens(s):
+    if not s:
+        return set()
+    parts = re.split(r"[^a-z0-9]+", str(s).lower())
+    return {p for p in parts if len(p) >= 2 and p not in GENERIC_TOKENS}
+
+
+def stream_pid_of(props):
+    try:
+        return int(props.get("application.process.id"))
+    except (TypeError, ValueError):
+        return None
+
+
 def load_muted_state():
     if os.path.exists(MUTED_FILE):
         try:
@@ -149,23 +173,28 @@ def find_matching_streams(app_id, app_name):
 
     for si in sink_inputs:
         props = si.get("props", {})
-        stream_pid = props.get("application.process.id")
+        stream_pid = stream_pid_of(props)
         stream_name = props.get("application.name")
         stream_bin = props.get("application.process.binary")
         stream_app_id = props.get("application.id")
 
         is_match = False
         # PID match
-        if stream_pid and int(stream_pid) in target_pids:
+        if stream_pid is not None and stream_pid in target_pids:
             is_match = True
         else:
-            # Metadata fuzzy match
+            # Metadata fallback: exact normalized equality or a shared
+            # meaningful token. Raw substrings are never used, so an app named
+            # "Code" cannot match a stream named "Unicode" (and vice versa).
+            app_tokens = name_tokens(app_name) | name_tokens(app_id)
             for val in [stream_name, stream_bin, stream_app_id]:
-                nval = normalize_name(val)
-                if not nval:
+                if not val:
                     continue
-                if (norm_name and (norm_name in nval or nval in norm_name)) or \
-                   (norm_id and (norm_id in nval or nval in norm_id)):
+                nval = normalize_name(val)
+                if nval and (nval == norm_id or nval == norm_name):
+                    is_match = True
+                    break
+                if app_tokens & name_tokens(val):
                     is_match = True
                     break
 
