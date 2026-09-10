@@ -55,6 +55,19 @@ To update to the latest version at any time:
 omarchy plugin update wdg.dock --yes
 ```
 
+To remove the dock and its saved state:
+
+```bash
+omarchy plugin remove wdg.dock --yes
+```
+
+### Requirements
+
+- **Omarchy / Quickshell** — the shell host that loads the `panel` plugin.
+- **Hyprland** (`hyprctl`) — window tracking, focus, close, and descendant PID lookup.
+- **PipeWire or PulseAudio** (`pactl`) and **Python 3** — used by `dock-audio.py` for the per-application "Mute Audio" action. Mute state is stored in `~/.config/omarchy/dock-muted-apps.json`.
+- **notify-send** (optional) — desktop notification when an app is muted or restored.
+
 ---
 
 ## 🎮 Controls & Interaction
