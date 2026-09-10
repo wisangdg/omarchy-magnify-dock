@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "wdg.magnify-dock",
+  "id": "wdg.dock",
   "name": "macOS Magnify Dock",
   "version": "1.7.0",
   "author": "wdg",

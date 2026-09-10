@@ -52,7 +52,7 @@ omarchy plugin add https://github.com/wisangdg/omarchy-magnify-dock.git --enable
 To update to the latest version at any time:
 
 ```bash
-omarchy plugin update wdg.magnify-dock --yes
+omarchy plugin update wdg.dock --yes
 ```
 
 ---
