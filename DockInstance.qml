@@ -4,6 +4,8 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Wayland
 import Quickshell.Io
+import Quickshell.Hyprland
+import QtQml.Models
 import qs.Commons
 import qs.Ui
 import "DockModel.js" as DockModel
@@ -18,12 +20,13 @@ Item {
   property var appLibrary: shell ? shell.appLibrary : null
 
   // Sleek macOS Dock Dimensions & Spacing
-  property real baseIconSize: 42
-  property real iconPixelSize: 34
-  property real maxMagnification: 1.6
+  property var preferences: DockModel.normalizeSettings(null)
+  property real baseIconSize: root.iconPixelSize + 8
+  property real iconPixelSize: root.preferences.iconSize
+  property real maxMagnification: root.preferences.magnification
   property real magnifyRadius: 140
   property real dockPadding: 8
-  property real itemSpacing: 6
+  property real itemSpacing: root.preferences.spacing
   property real capsuleHeight: root.baseIconSize + root.dockPadding * 2
   property real layoutExpansionRatio: 0.82
   property int magnificationDuration: 55
@@ -42,6 +45,101 @@ Item {
   property bool edgeHovered: false
   property bool dockPresented: true
   property real hoverCursorX: -1
+  property bool settingsOpen: false
+  property bool pickerOpen: false
+  property string pickerKey: ""
+  property string pendingPickerKey: ""
+  property string pickerTitle: ""
+  property var windowMetadata: []
+  property var windowRows: []
+  property real pickerAnchorX: 0
+  property real pickerAnchorY: 0
+  readonly property var hyprMonitor: root.dockScreen ? Hyprland.monitorFor(root.dockScreen) : null
+  readonly property var activeWorkspace: root.hyprMonitor ? root.hyprMonitor.activeWorkspace : null
+  readonly property bool popupOpen: root.contextMenuOpen || root.pickerOpen || root.settingsOpen
+
+  onActiveWorkspaceChanged: Qt.callLater(root.rebuildDock)
+  onHyprMonitorChanged: Qt.callLater(root.rebuildDock)
+
+  function changePreference(key, value) {
+    var next = Object.assign({}, root.preferences)
+    next[key] = value
+    root.preferences = DockModel.normalizeSettings(next)
+    root.rebuildDock()
+    settingsSaveTimer.restart()
+  }
+
+  function openSettings() {
+    root.closeContextMenu()
+    root.clearTooltip()
+    root.closePicker()
+    root.settingsOpen = true
+    root.revealDock()
+  }
+
+  function closeSettings() {
+    root.settingsOpen = false
+    root.scheduleDockHide()
+  }
+
+  function requestAppTooltip(item, target) {
+    if (root.settingsOpen || root.contextMenuOpen || root.draggingPinnedIndex >= 0) return
+    if (!item || !item.windows || item.windows.length === 0) {
+      root.closePicker()
+      root.requestTooltip(target, item ? item.name : "")
+      return
+    }
+    root.clearTooltip()
+    pickerHideTimer.stop()
+    var point = dockPanel.contentItem.mapFromItem(target,
+      target.width / 2 + Number(target.animatedOffsetX || 0), -8)
+    root.pickerAnchorX = point.x
+    root.pickerAnchorY = point.y
+    root.pendingPickerKey = item.key
+    if (root.pickerOpen) root.showPicker()
+    else pickerShowTimer.restart()
+  }
+
+  function releaseAppTooltip(target) {
+    root.releaseTooltip(target)
+    pickerShowTimer.stop()
+    root.pendingPickerKey = ""
+    if (root.pickerOpen) pickerHideTimer.restart()
+  }
+
+  function showPicker() {
+    root.pickerKey = root.pendingPickerKey
+    root.pendingPickerKey = ""
+    root.refreshPicker()
+    root.pickerOpen = root.windowRows.length > 0
+    if (root.pickerOpen) root.revealDock()
+  }
+
+  function refreshPicker() {
+    var items = root.dockData.pinned.concat(root.dockData.unpinned)
+    var item = items.find(function(value) { return value.key === root.pickerKey })
+    root.pickerTitle = item ? item.name : ""
+    root.windowRows = DockModel.pickerRows(item, root.windowMetadata)
+    if (root.windowRows.length === 0) root.closePicker()
+  }
+
+  function closePicker() {
+    pickerShowTimer.stop()
+    pickerHideTimer.stop()
+    root.pendingPickerKey = ""
+    root.pickerKey = ""
+    root.pickerOpen = false
+    root.scheduleDockHide()
+  }
+
+  Timer { id: pickerShowTimer; interval: 380; onTriggered: root.showPicker() }
+  Timer {
+    id: pickerHideTimer
+    interval: 320
+    onTriggered: if (!windowPicker.containsPointer) root.closePicker()
+  }
+  Timer { id: settingsSaveTimer; interval: 300; onTriggered: root.saveConfig() }
+
 
   // Fixed invariant baseline geometry to eliminate jitter/shaking
   property var baselineGeometry: null
@@ -141,7 +239,8 @@ Item {
   property double contextMenuOpenedAt: 0
 
   function requestTooltip(target, text) {
-    if (root.draggingPinnedIndex >= 0) return
+    if (root.draggingPinnedIndex >= 0 || root.settingsOpen || root.contextMenuOpen) return
+    root.closePicker()
     tooltipHideTimer.stop()
     root.pendingTooltipTarget = target
     root.pendingTooltipText = String(text || "")
@@ -185,12 +284,13 @@ Item {
     // The edge is only a reveal trigger. Keeping it in this condition can
     // leave the dock permanently open after the first reveal because a
     // compositor does not always emit an exit while the input mask changes.
-    if (root.autoHide && !root.isDockHovered && !root.contextMenuOpen) {
+    if (root.autoHide && !root.isDockHovered && !root.popupOpen) {
       hideDockTimer.restart()
     }
   }
 
   function openContextMenu(item, target) {
+    root.closePicker()
     root.clearTooltip()
     // Recreate the popup lifecycle for every request. Layer-shell geometry can
     // change after toggling reserve space; reusing an already-true visible
@@ -199,6 +299,7 @@ Item {
     root.contextTarget = item
     root.contextAnchor = target
     root.contextMenuOpenedAt = Date.now()
+    root.probeAppAudioStatus(item)
     root.revealDock()
     Qt.callLater(function() {
       if (root.contextAnchor !== target) return
@@ -244,15 +345,15 @@ Item {
 
   Timer {
     id: edgeRevealTimer
-    interval: 0
+    interval: root.preferences.revealDelay
     onTriggered: root.revealDock()
   }
 
   Timer {
     id: hideDockTimer
-    interval: 220
+    interval: root.preferences.hideDelay
     onTriggered: {
-      if (root.autoHide && !root.isDockHovered && !root.edgeHovered && !root.contextMenuOpen) {
+      if (root.autoHide && !root.isDockHovered && !root.edgeHovered && !root.popupOpen) {
         root.clearTooltip()
         root.hoverCursorX = -1
         root.updateMagnification()
@@ -288,6 +389,104 @@ Item {
     }
   }
 
+  // Muted Apps State Persistence & Audio Control
+  readonly property string mutedAppsPath: Quickshell.env("HOME") + "/.config/omarchy/dock-muted-apps.json"
+  readonly property string dockAudioScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/wdg.dock/dock-audio.py"
+  property var mutedAppsMap: ({})
+
+  FileView {
+    id: mutedAppsFileView
+    path: root.mutedAppsPath
+    watchChanges: true
+    onFileChanged: reload()
+    printErrors: false
+    onLoaded: root.loadMutedApps(text())
+    onLoadFailed: root.loadMutedApps("")
+  }
+
+  function loadMutedApps(rawText) {
+    try {
+      if (rawText && rawText.trim().length > 0) {
+        var parsed = JSON.parse(rawText)
+        if (parsed && typeof parsed === "object") {
+          root.mutedAppsMap = parsed
+          if (typeof dockContextMenu !== "undefined" && dockContextMenu && root.contextTarget) {
+            dockContextMenu.isAudioMuted = root.isAppAudioMuted(root.contextTarget)
+          }
+          return
+        }
+      }
+    } catch (e) {}
+    root.mutedAppsMap = ({})
+  }
+
+  function isAppAudioMuted(item) {
+    if (!item) return false
+    var map = root.mutedAppsMap || {}
+    var id = String(item.id || "")
+    var name = String(item.name || "")
+    if (id && map[id] === true) return true
+    if (name && map[name] === true) return true
+    for (var k in map) {
+      if (!map[k]) continue
+      if (id && (k === id || DockModel.matchApp(k, id))) return true
+      if (name && (k === name || DockModel.normalizeId(k) === DockModel.normalizeId(name))) return true
+    }
+    return false
+  }
+
+  function toggleAppAudio(item) {
+    if (!item) return
+    var appId = String(item.id || "")
+    var appName = String(item.name || "")
+    var cmd = "python3 " + Util.shellQuote(root.dockAudioScript) + " toggle " + Util.shellQuote(appId) + " " + Util.shellQuote(appName)
+    Util.execDetached(cmd)
+  }
+
+  Process {
+    id: audioStatusProc
+    command: []
+    stdout: SplitParser {
+      onRead: function(line) {
+        try {
+          var data = JSON.parse(line)
+          if (data && typeof data.is_muted === "boolean") {
+            var key = data.app_id || data.app_name
+            if (key) {
+              var next = Object.assign({}, root.mutedAppsMap)
+              if (data.is_muted) next[key] = true
+              else delete next[key]
+              root.mutedAppsMap = next
+            }
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  function probeAppAudioStatus(item) {
+    if (!item || audioStatusProc.running) return
+    var appId = String(item.id || "")
+    var appName = String(item.name || "")
+    audioStatusProc.command = ["python3", root.dockAudioScript, "status", appId, appName]
+    audioStatusProc.running = true
+  }
+
+  // A saved mute must also cover streams that appear after the menu action,
+  // otherwise muting a silent app (or one that restarts playback) has no effect.
+  Timer {
+    id: audioSyncTimer
+    interval: 1500
+    repeat: true
+    running: Object.keys(root.mutedAppsMap).length > 0
+    onTriggered: audioSyncProc.running = true
+  }
+
+  Process {
+    id: audioSyncProc
+    command: ["python3", root.dockAudioScript, "sync"]
+  }
+
   // Settings File Persistence
   readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy/dock-pinned-macos.json"
 
@@ -295,6 +494,7 @@ Item {
     id: configFileView
     path: root.configPath
     watchChanges: true
+    onFileChanged: reload()
     printErrors: false
     onLoaded: root.loadConfig(text())
     onLoadFailed: root.loadConfig("")
@@ -304,6 +504,9 @@ Item {
     try {
       if (rawText && rawText.trim().length > 0) {
         var parsed = JSON.parse(rawText)
+        if (parsed.settings && !settingsSaveTimer.running) {
+          root.preferences = DockModel.normalizeSettings(parsed.settings)
+        }
         if (Array.isArray(parsed.pinned)) {
           root.customPinnedApps = parsed.pinned
         }
@@ -321,6 +524,7 @@ Item {
   function saveConfig() {
     var payload = {
       version: 1,
+      settings: root.preferences,
       autoHide: root.autoHide,
       reserveSpace: root.reserveSpace,
       pinned: Array.isArray(root.customPinnedApps) ? root.customPinnedApps : DockModel.defaultPinnedApps
@@ -366,14 +570,26 @@ Item {
       toplevels = []
     }
 
+    root.windowMetadata = DockModel.toArray(Hyprland.toplevels.values).map(function(win) {
+      return {
+        window: win.wayland,
+        monitorName: win.monitor ? win.monitor.name : "",
+        workspaceId: win.workspace ? win.workspace.id : null,
+        workspaceName: win.workspace ? win.workspace.name : ""
+      }
+    })
+    var visibleWindows = DockModel.filterWindows(toplevels, root.windowMetadata,
+      root.preferences.windowScope, root.dockScreen ? root.dockScreen.name : "",
+      root.activeWorkspace ? root.activeWorkspace.id : null)
     var data = DockModel.buildDockItems(
-      toplevels,
+      visibleWindows,
       DesktopEntries,
       root.appLibrary,
       Quickshell,
       root.customPinnedApps
     )
     root.dockData = data
+    if (root.pickerOpen) root.refreshPicker()
 
     var pCount = data.pinned ? data.pinned.length : 0
     var uCount = data.unpinned ? data.unpinned.length : 0
@@ -394,6 +610,7 @@ Item {
       root.finishDropReorder()
     }
     root.clearTooltip()
+    root.closePicker()
     root.isDropSettling = false
     root.draggingPinnedIndex = index
     root.dragTargetIndex = index
@@ -610,6 +827,23 @@ Item {
     root.extraCapsuleWidth = (typeof offsets.totalExtra === "number") ? offsets.totalExtra : 0
   }
 
+  // Observe each window, including moves that do not change the global list.
+  Instantiator {
+    model: Hyprland.toplevels
+    delegate: Connections {
+      required property var modelData
+      target: modelData
+      function onWorkspaceChanged() { Qt.callLater(root.rebuildDock) }
+      function onMonitorChanged() { Qt.callLater(root.rebuildDock) }
+      function onTitleChanged() { Qt.callLater(root.rebuildDock) }
+      function onWaylandHandleChanged() { Qt.callLater(root.rebuildDock) }
+    }
+  }
+  Connections {
+    target: Hyprland.toplevels
+    function onValuesChanged() { Qt.callLater(root.rebuildDock) }
+  }
+
   // Reactive listeners for window and app changes
   Connections {
     target: ToplevelManager.toplevels
@@ -742,6 +976,65 @@ Item {
     }
 
     PopupWindow {
+      id: pickerWindow
+      visible: root.pickerOpen
+      color: "transparent"
+      implicitWidth: windowPicker.width
+      implicitHeight: windowPicker.height
+      anchor {
+        window: dockPanel
+        adjustment: PopupAdjustment.Slide
+        edges: Edges.Top | Edges.Left
+        gravity: Edges.Bottom | Edges.Right
+        rect.x: Math.round(root.pickerAnchorX - pickerWindow.implicitWidth / 2)
+        rect.y: Math.round(root.pickerAnchorY - pickerWindow.implicitHeight)
+        rect.width: 1
+        rect.height: 1
+      }
+      DockWindowPicker {
+        id: windowPicker
+        title: root.pickerTitle
+        rows: root.windowRows
+        maxHeight: Math.max(120, (root.dockScreen ? root.dockScreen.height : 720) - dockPanel.height - 32)
+        onContainsPointerChanged: {
+          if (containsPointer) pickerHideTimer.stop()
+          else if (root.pickerOpen) pickerHideTimer.restart()
+        }
+        onWindowActivated: function(win) {
+          root.closePicker()
+          DockModel.activateWindow(win)
+        }
+        onWindowClosed: function(win) { DockModel.closeAppWindow({ windows: [win] }) }
+        onDismissed: root.closePicker()
+      }
+    }
+
+    PopupWindow {
+      id: settingsWindow
+      visible: root.settingsOpen
+      color: "transparent"
+      implicitWidth: settingsPanel.width
+      implicitHeight: settingsPanel.height
+      anchor {
+        window: dockPanel
+        adjustment: PopupAdjustment.Slide
+        edges: Edges.Top | Edges.Left
+        gravity: Edges.Bottom | Edges.Right
+        rect.x: Math.round((dockPanel.width - settingsWindow.implicitWidth) / 2)
+        rect.y: Math.round(dockPanel.height - root.capsuleHeight - settingsWindow.implicitHeight - 12)
+        rect.width: 1
+        rect.height: 1
+      }
+      DockSettings {
+        id: settingsPanel
+        settings: root.preferences
+        maxHeight: Math.max(180, (root.dockScreen ? root.dockScreen.height : 720) - dockPanel.height - 32)
+        onPreferenceChanged: function(key, value) { root.changePreference(key, value) }
+        onDismissed: root.closeSettings()
+      }
+    }
+
+    PopupWindow {
       id: contextWindow
       visible: root.contextMenuOpen && root.contextAnchor !== null
       color: "transparent"
@@ -776,6 +1069,7 @@ Item {
         isOpen: root.contextMenuOpen
         isAutoHide: root.autoHide
         isReserveSpace: root.reserveSpace
+        isAudioMuted: root.isAppAudioMuted(root.contextTarget)
 
         onLaunchClicked: function(item) {
           DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
@@ -786,6 +1080,9 @@ Item {
         onQuitClicked: function(item) {
           DockModel.closeAppWindow(item)
         }
+        onMuteAudioToggled: function(item) {
+          root.toggleAppAudio(item)
+        }
         onAutoHideToggled: {
           root.autoHide = !root.autoHide
           root.saveConfig()
@@ -794,6 +1091,7 @@ Item {
           root.reserveSpace = !root.reserveSpace
           root.saveConfig()
         }
+        onSettingsRequested: root.openSettings()
         onMenuClosed: root.closeContextMenu()
       }
     }
@@ -809,15 +1107,15 @@ Item {
         onHoveredChanged: {
           root.edgeHovered = hovered
           if (hovered) {
-            root.revealDock()
+            if (!root.dockPresented) edgeRevealTimer.restart()
           } else {
             edgeRevealTimer.stop()
             root.scheduleDockHide()
           }
         }
         onPointChanged: {
-          if (hovered && root.autoHide && !root.dockPresented) {
-            root.revealDock()
+          if (hovered && root.autoHide && !root.dockPresented && !edgeRevealTimer.running) {
+            edgeRevealTimer.start()
           }
         }
       }
@@ -892,7 +1190,7 @@ Item {
       }
 
       // Frosted Glass Appearance matching Omarchy theme
-      color: Util.alpha(Color.background, 0.76)
+      color: Util.alpha(Color.background, root.preferences.opacity)
       border.color: Util.alpha(Color.foreground, 0.16)
       border.width: 1
 
@@ -951,11 +1249,14 @@ Item {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              acceptedButtons: Qt.LeftButton
+              acceptedButtons: Qt.LeftButton | Qt.RightButton
 
               onEntered: root.requestTooltip(launcherItem, "Applications")
               onExited: root.releaseTooltip(launcherItem)
-              onClicked: Util.execDetached("omarchy-menu toggle apps")
+              onClicked: function(mouse) {
+                if (mouse.button === Qt.RightButton) root.openSettings()
+                else Util.execDetached("omarchy-menu toggle apps")
+              }
             }
           }
         }
@@ -1010,11 +1311,11 @@ Item {
 
             onHovered: function(item, srcItem) {
               if (root.draggingPinnedIndex >= 0) return
-              root.requestTooltip(srcItem, item ? String(item.name || "") : "")
+              root.requestAppTooltip(item, srcItem)
             }
 
             onUnhovered: function(srcItem) {
-              root.releaseTooltip(srcItem)
+              root.releaseAppTooltip(srcItem)
             }
 
             onDragStarted: function(idx, item, sceneX, sceneY) {
@@ -1079,11 +1380,11 @@ Item {
             }
 
             onHovered: function(item, srcItem) {
-              root.requestTooltip(srcItem, item ? String(item.name || "") : "")
+              root.requestAppTooltip(item, srcItem)
             }
 
             onUnhovered: function(srcItem) {
-              root.releaseTooltip(srcItem)
+              root.releaseAppTooltip(srcItem)
             }
           }
         }

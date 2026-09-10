@@ -1,5 +1,65 @@
 // DockModel.js - Core logic for macOS-style dock in Omarchy
 
+var defaultSettings = {
+  iconSize: 34, magnification: 1.6, spacing: 6, opacity: 0.76,
+  revealDelay: 0, hideDelay: 220, windowScope: "all"
+};
+
+function normalizeSettings(input) {
+  input = input && typeof input === "object" ? input : {};
+  var result = {};
+  var ranges = {
+    iconSize: [24, 64], magnification: [1, 2], spacing: [2, 16],
+    opacity: [0.2, 1], revealDelay: [0, 1000], hideDelay: [100, 2000]
+  };
+  for (var key in ranges) {
+    var value = input[key];
+    result[key] = typeof value === "number" && isFinite(value)
+      ? Math.max(ranges[key][0], Math.min(ranges[key][1], value))
+      : defaultSettings[key];
+  }
+  result.windowScope = ["all", "monitor", "workspace"].indexOf(input.windowScope) >= 0
+    ? input.windowScope : "all";
+  return result;
+}
+
+function windowMetadata(win, metadata) {
+  for (var i = 0; i < metadata.length; i++) {
+    if (metadata[i].window === win) return metadata[i];
+  }
+  return null;
+}
+
+// Keep the original Wayland handles so focus and close always target one window.
+function filterWindows(windows, metadata, scope, monitorName, workspaceId) {
+  var list = toArray(windows);
+  if (scope !== "monitor" && scope !== "workspace") return list;
+  return list.filter(function(win) {
+    var info = windowMetadata(win, metadata);
+    if (!info || !monitorName || info.monitorName !== monitorName) return false;
+    return scope === "monitor" || (workspaceId !== null && workspaceId !== undefined
+      && info.workspaceId === workspaceId);
+  });
+}
+
+function pickerRows(item, metadata) {
+  return toArray(item ? item.windows : []).filter(function(win) { return !!win; }).map(function(win) {
+    var info = windowMetadata(win, metadata);
+    return {
+      window: win,
+      title: String(win.title || (item && item.name) || "Untitled window"),
+      location: info ? ((info.workspaceName ? "Workspace " + info.workspaceName : "")
+        + (info.monitorName ? " · " + info.monitorName : "")) : "",
+      active: !!win.activated
+    };
+  });
+}
+
+function activateWindow(win) {
+  if (!win || typeof win.activate !== "function") return;
+  try { win.activate(); } catch (e) {}
+}
+
 var defaultPinnedApps = [
   "vivaldi-stable",
   "Alacritty",

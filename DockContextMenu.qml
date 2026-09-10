@@ -12,14 +12,17 @@ Rectangle {
   property bool isOpen: false
   property bool isAutoHide: true
   property bool isReserveSpace: false
+  property bool isAudioMuted: false
   readonly property bool containsPointer: menuHover.hovered
 
   signal pinToggled(var item)
   signal quitClicked(var item)
   signal launchClicked(var item)
+  signal muteAudioToggled(var item)
   signal autoHideToggled()
   signal reserveSpaceToggled()
   signal menuClosed()
+  signal settingsRequested()
 
   visible: isOpen
   opacity: isOpen ? 1 : 0
@@ -152,6 +155,40 @@ Rectangle {
       }
     }
 
+    // Mute / Unmute Audio Action (Silent)
+    Rectangle {
+      visible: root.targetItem !== null
+      width: parent.width
+      height: 26
+      radius: 6
+      color: muteMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+
+      Row {
+        anchors.fill: parent
+        anchors.leftMargin: 8
+        spacing: 8
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.isAudioMuted ? "󰕾  Unmute Audio" : "󰝟  Mute Audio (Silent)"
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          color: Color.foreground
+        }
+      }
+
+      MouseArea {
+        id: muteMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: {
+          var item = root.targetItem
+          root.menuClosed()
+          root.muteAudioToggled(item)
+        }
+      }
+    }
+
     // Quit / Close Action
     Rectangle {
       visible: root.targetItem !== null && root.targetItem.isRunning
@@ -191,6 +228,12 @@ Rectangle {
       width: parent.width
       height: 1
       color: Util.alpha(Color.foreground, 0.12)
+    }
+
+    Button {
+      width: parent.width
+      text: "Dock Settings…"
+      onClicked: root.settingsRequested()
     }
 
     // Auto-hide Toggle

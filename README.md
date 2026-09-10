@@ -67,6 +67,8 @@ omarchy plugin update wdg.magnify-dock --yes
 | **Reorder Favorites** | `Click & Drag` | Drag any pinned app along the dock rail to reorder. |
 | **App Drawer / Launcher** | `Click 󰀻 Icon` | Toggles the native Omarchy application launcher (leftmost button). |
 | **Reveal Dock** | `Cursor to Edge` | Instantly reveals the dock when in Auto-hide mode. |
+| **Choose a Window** | `Hover Running App` | Shows window titles and workspace/monitor labels. Click a row to focus that window or its close button to close only that window. |
+| **Dock Settings** | `Right-Click Launcher` | Opens live appearance and window-filter settings. Also available in any app's context menu. |
 
 ---
 
@@ -74,11 +76,26 @@ omarchy plugin update wdg.magnify-dock --yes
 
 Your preferences are automatically saved to `~/.config/omarchy/dock-pinned-macos.json`:
 
+Open **Dock Settings…** from an app's context menu, or right-click the application
+launcher. Icon size, magnification, spacing, background opacity, and auto-hide
+delays update immediately and save automatically. Settings are shared across
+monitors; other dock instances reload saved changes. Existing configurations
+without a `settings` object continue to use the original appearance.
+
 ```json
 {
   "version": 1,
   "autoHide": false,
   "reserveSpace": true,
+  "settings": {
+    "iconSize": 34,
+    "magnification": 1.6,
+    "spacing": 6,
+    "opacity": 0.76,
+    "revealDelay": 0,
+    "hideDelay": 220,
+    "windowScope": "all"
+  },
   "pinned": [
     "vivaldi-stable",
     "elecwhat",
@@ -96,6 +113,22 @@ Your preferences are automatically saved to `~/.config/omarchy/dock-pinned-macos
 * **`reserveSpace`** (`true` / `false`): Tells Hyprland to reserve exclusive screen space at the bottom so tiled windows stop cleanly above the dock capsule.
 * **`pinned`** (array): The ordered list of desktop application IDs pinned to your dock favorites.
 
+The `settings.windowScope` filter supports:
+
+* **`all`**: Running windows across all monitors and workspaces (default).
+* **`monitor`**: Running windows on the monitor containing this dock.
+* **`workspace`**: Running windows on this monitor's active workspace. Each monitor follows its own active workspace, independently of keyboard focus.
+
+Pinned shortcuts remain visible in every mode. Running dots, window counts,
+click-to-focus targets, and the hover window picker use the selected scope.
+An app with no windows in that scope behaves as a launcher. Windows whose
+Hyprland metadata is not available yet appear in `all` mode; filtered modes
+include them once their monitor and workspace are known.
+
+Hovering a running app opens a scrollable window picker after 380 ms. It remains
+open while the pointer moves into the picker, and suspends auto-hide until it
+closes. This release shows titles and workspace labels, without thumbnail capture.
+
 ---
 
 ## 🛠️ Verification & Testing
@@ -105,6 +138,14 @@ This plugin includes an automated regression test suite ensuring zero regression
 ```bash
 node tests/dock-regressions.cjs
 omarchy plugin validate .
+```
+
+UI interaction tests require **Qt 6** (the unqualified `qmltestrunner` binary may
+belong to Qt 5). They use a small test theme instead of loading the live shell:
+
+```bash
+QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic QT_QUICK_CONTROLS_STYLE=Basic \
+  /usr/lib/qt6/bin/qmltestrunner -input tests/qml -import tests/imports -o -,txt
 ```
 
 ---
