@@ -82,7 +82,16 @@ Item {
     root.scheduleDockHide()
   }
 
+  function dismissAppPopups() {
+    // Focus updates rebuild the repeaters while the compositor may warp the
+    // pointer. Ignore synthetic hover enters from those replacement delegates.
+    appHoverCooldown.restart()
+    root.clearTooltip()
+    root.closePicker()
+  }
+
   function requestAppTooltip(item, target) {
+    if (appHoverCooldown.running) return
     if (root.settingsOpen || root.contextMenuOpen || root.draggingPinnedIndex >= 0) return
     if (!item || !item.windows || item.windows.length === 0) {
       root.closePicker()
@@ -132,6 +141,7 @@ Item {
     root.scheduleDockHide()
   }
 
+  Timer { id: appHoverCooldown; interval: 700 }
   Timer { id: pickerShowTimer; interval: 380; onTriggered: root.showPicker() }
   Timer {
     id: pickerHideTimer
@@ -831,7 +841,10 @@ Item {
 
   Connections {
     target: ToplevelManager
-    function onActiveToplevelChanged() { root.rebuildDock() }
+    function onActiveToplevelChanged() {
+      root.dismissAppPopups()
+      root.rebuildDock()
+    }
   }
 
   Connections {
@@ -980,7 +993,7 @@ Item {
           else if (root.pickerOpen) pickerHideTimer.restart()
         }
         onWindowActivated: function(win) {
-          root.closePicker()
+          root.dismissAppPopups()
           DockModel.activateWindow(win)
         }
         onWindowClosed: function(win) { DockModel.closeAppWindow({ windows: [win] }) }
@@ -1271,6 +1284,7 @@ Item {
             targetOffsetX: (Array.isArray(root.pinnedOffsets) && index < root.pinnedOffsets.length) ? root.pinnedOffsets[index] : 0
 
             onClicked: function(item) {
+              root.dismissAppPopups()
               DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
             }
 
@@ -1341,6 +1355,7 @@ Item {
             targetOffsetX: (Array.isArray(root.unpinnedOffsets) && index < root.unpinnedOffsets.length) ? root.unpinnedOffsets[index] : 0
 
             onClicked: function(item) {
+              root.dismissAppPopups()
               DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
             }
 
