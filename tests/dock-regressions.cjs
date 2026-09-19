@@ -228,6 +228,45 @@ assert.equal(isMuted(audioRoot, model, null), false, "null item should return fa
 loadMuted(audioRoot, model, "");
 assert.equal(isMuted(audioRoot, model, { id: "spotify" }), false, "empty config should clear muted apps");
 
+// Dynamic desktop entry and icon resolution tests (Orca, Warp, StartupWMClass)
+const mockDesktopEntries = {
+  byId(id) { return null; },
+  applications: {
+    values: [
+      { id: "orca-ide.desktop", startupClass: "orca", name: "Orca", icon: "orca-ide" },
+      { id: "dev.warp.Warp.desktop", startupClass: "dev.warp.Warp", name: "Warp", icon: "dev.warp.Warp" }
+    ]
+  }
+};
+
+const foundOrca = model.findDesktopEntry(mockDesktopEntries, "orca");
+assert.ok(foundOrca, "findDesktopEntry must find orca-ide for appId=orca via startupClass");
+assert.equal(foundOrca.id, "orca-ide.desktop");
+assert.equal(foundOrca.icon, "orca-ide");
+
+const mockAppLib = {
+  iconIndex: {
+    "orca-ide": "/usr/share/icons/hicolor/128x128/apps/orca-ide.png"
+  },
+  iconSource(name) {
+    return "/usr/share/icons/Adwaita/application-x-executable.png";
+  }
+};
+
+const orcaDockItems = model.buildDockItems(
+  [{ appId: "orca", title: "Orca" }],
+  mockDesktopEntries,
+  mockAppLib,
+  null,
+  []
+);
+assert.equal(orcaDockItems.unpinned.length, 1);
+assert.equal(orcaDockItems.unpinned[0].icon, "file:///usr/share/icons/hicolor/128x128/apps/orca-ide.png", "running Orca window must resolve orca-ide icon without showing gear fallback");
+
+// Fuzzy icon resolution without desktop entry
+const fuzzyIcon = model.resolveIcon("orca", mockAppLib, null, ["orca"]);
+assert.equal(fuzzyIcon, "file:///usr/share/icons/hicolor/128x128/apps/orca-ide.png", "fuzzy icon lookup must map orca to orca-ide in iconIndex");
+
 // CLI helper integration test
 const scriptPath = path.join(directory, "dock-audio.py");
 const statusOut = JSON.parse(spawnSync("python3", [scriptPath, "status", "test-app", "Test App"], { encoding: "utf8" }).stdout);
@@ -240,4 +279,4 @@ assert.equal(typeof syncOut.synced, "number");
 const audioEdge = spawnSync("python3", [path.join(directory, "tests", "test_dock_audio.py")], { encoding: "utf8" });
 assert.equal(audioEdge.status, 0, audioEdge.stdout + audioEdge.stderr);
 
-console.log("PASS: per-app audio mute state works; dock-audio.py CLI verified.");
+console.log("PASS: per-app audio mute state works; dynamic desktop entry & icon resolution verified; dock-audio.py CLI verified.");

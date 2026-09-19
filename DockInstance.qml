@@ -560,8 +560,13 @@ Item {
     }
 
     root.windowMetadata = DockModel.toArray(Hyprland.toplevels.values).map(function(win) {
+      var ipc = win.lastIpcObject || win;
       return {
         window: win.wayland,
+        appId: (win.wayland && win.wayland.appId) ? win.wayland.appId : "",
+        windowClass: ipc.class || win.class || "",
+        initialClass: ipc.initialClass || win.initialClass || "",
+        title: ipc.title || win.title || "",
         monitorName: win.monitor ? win.monitor.name : "",
         workspaceId: win.workspace ? win.workspace.id : null,
         workspaceName: win.workspace ? win.workspace.name : ""
@@ -575,7 +580,8 @@ Item {
       DesktopEntries,
       root.appLibrary,
       Quickshell,
-      root.customPinnedApps
+      root.customPinnedApps,
+      root.windowMetadata
     )
     root.dockData = data
     if (root.pickerOpen) root.refreshPicker()

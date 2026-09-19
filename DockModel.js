@@ -24,8 +24,10 @@ function normalizeSettings(input) {
 }
 
 function windowMetadata(win, metadata) {
-  for (var i = 0; i < metadata.length; i++) {
-    if (metadata[i].window === win) return metadata[i];
+  if (!win || !metadata) return null;
+  var list = toArray(metadata);
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].window === win) return list[i];
   }
   return null;
 }
@@ -86,7 +88,7 @@ function toArray(values) {
 }
 
 // Preserve release channels: separate installations must not share windows or pins.
-var commonSuffixes = /-(stable|bin|git|oss|browser|desktop|electron|community)$/i;
+var commonSuffixes = /-(stable|bin|git|oss|browser|desktop|electron|community|ide|app|client|launcher|ce|ee)$/i;
 
 function cleanAppId(id) {
   if (!id) return "";
@@ -156,18 +158,27 @@ function entryAliases(entry, fallbackId) {
   return aliases;
 }
 
-function windowAliases(win) {
+function windowAliases(win, metadata) {
   if (!win) return [];
-  return [
+  var aliases = [
     win.appId || "",
     win.initialClass || "",
     win.class || ""
   ];
+  if (metadata) {
+    var info = windowMetadata(win, metadata);
+    if (info) {
+      if (info.appId) aliases.push(info.appId);
+      if (info.windowClass) aliases.push(info.windowClass);
+      if (info.initialClass) aliases.push(info.initialClass);
+    }
+  }
+  return aliases.filter(function(a) { return !!a; });
 }
 
-function entryMatchesWindow(entry, fallbackId, win) {
+function entryMatchesWindow(entry, fallbackId, win, metadata) {
   var appAliases = entryAliases(entry, fallbackId);
-  var winAliases = windowAliases(win);
+  var winAliases = windowAliases(win, metadata);
   for (var a = 0; a < appAliases.length; a++) {
     for (var w = 0; w < winAliases.length; w++) {
       if (matchApp(appAliases[a], winAliases[w])) return true;
@@ -176,27 +187,100 @@ function entryMatchesWindow(entry, fallbackId, win) {
   return false;
 }
 
-function findDesktopEntry(desktopEntries, appId) {
-  if (!desktopEntries || !appId) return null;
-  var id = String(appId);
+function findDesktopEntry(desktopEntries, appId, win, metadata) {
+  if (!desktopEntries || (!appId && !win)) return null;
 
-  var entry = desktopEntries.byId ? desktopEntries.byId(id) : null;
-  if (entry) return entry;
+  var candidates = [];
+  function addCandidate(val) {
+    if (!val) return;
+    var s = String(val).trim();
+    if (s.length > 0 && candidates.indexOf(s) === -1) candidates.push(s);
+    var lower = s.toLowerCase();
+    if (lower.length > 0 && candidates.indexOf(lower) === -1) candidates.push(lower);
+    var noExt = lower.replace(/\.desktop$/i, "");
+    if (noExt.length > 0 && candidates.indexOf(noExt) === -1) candidates.push(noExt);
+    var cleaned = cleanAppId(s);
+    if (cleaned.length > 0 && candidates.indexOf(cleaned) === -1) candidates.push(cleaned);
+  }
 
-  entry = desktopEntries.byId ? desktopEntries.byId(id.toLowerCase()) : null;
-  if (entry) return entry;
+  addCandidate(appId);
+  if (win) {
+    var winList = windowAliases(win, metadata);
+    for (var w = 0; w < winList.length; w++) {
+      addCandidate(winList[w]);
+    }
+    if (win.title) {
+      var parts = String(win.title).split(/\s+[-–—|:]\s+/);
+      for (var p = 0; p < parts.length; p++) {
+        var part = parts[p].trim();
+        if (part.length > 1 && part.length < 30) {
+          addCandidate(part);
+        }
+      }
+    }
+  }
 
-  if (desktopEntries.heuristicLookup) {
-    entry = desktopEntries.heuristicLookup(id);
+  if (candidates.length === 0) return null;
+
+  // 1. Direct ID lookups
+  for (var c = 0; c < candidates.length; c++) {
+    var cand = candidates[c];
+    var entry = desktopEntries.byId ? desktopEntries.byId(cand) : null;
+    if (entry) return entry;
+    entry = desktopEntries.byId ? desktopEntries.byId(cand + ".desktop") : null;
     if (entry) return entry;
   }
 
+  // 2. Heuristic lookup
+  if (desktopEntries.heuristicLookup) {
+    for (var h = 0; h < candidates.length; h++) {
+      var hEntry = desktopEntries.heuristicLookup(candidates[h]);
+      if (hEntry) return hEntry;
+    }
+  }
+
+  // 3. Scan applications model
   if (desktopEntries.applications) {
     var apps = toArray(desktopEntries.applications.values);
+
+    // Pass A: Match StartupWMClass (FreeDesktop standard for window class mapping)
     for (var i = 0; i < apps.length; i++) {
-      var item = apps[i];
-      if (item && item.id && matchApp(item.id, id)) {
-        return item;
+      var scItem = apps[i];
+      if (!scItem || !scItem.startupClass) continue;
+      for (var k = 0; k < candidates.length; k++) {
+        if (matchApp(scItem.startupClass, candidates[k])) return scItem;
+      }
+    }
+
+    // Pass B: Match item.id
+    for (var j = 0; j < apps.length; j++) {
+      var idItem = apps[j];
+      if (!idItem || !idItem.id) continue;
+      for (var m = 0; m < candidates.length; m++) {
+        if (matchApp(idItem.id, candidates[m])) return idItem;
+      }
+    }
+
+    // Pass C: Match executable commands and aliases
+    for (var e = 0; e < apps.length; e++) {
+      var exeItem = apps[e];
+      if (!exeItem) continue;
+      var aliases = entryAliases(exeItem, exeItem.id);
+      for (var a = 0; a < aliases.length; a++) {
+        var alias = aliases[a];
+        if (!alias) continue;
+        for (var n = 0; n < candidates.length; n++) {
+          if (matchApp(alias, candidates[n])) return exeItem;
+        }
+      }
+    }
+
+    // Pass D: Match application display name
+    for (var p = 0; p < apps.length; p++) {
+      var nameItem = apps[p];
+      if (!nameItem || !nameItem.name) continue;
+      for (var cn = 0; cn < candidates.length; cn++) {
+        if (matchApp(nameItem.name, candidates[cn])) return nameItem;
       }
     }
   }
@@ -204,32 +288,73 @@ function findDesktopEntry(desktopEntries, appId) {
   return null;
 }
 
-function resolveIcon(iconName, appLibrary, Quickshell) {
+function resolveIcon(iconName, appLibrary, Quickshell, candidates) {
   var name = String(iconName || "").trim();
-  if (!name) {
-    return (Quickshell && typeof Quickshell.iconPath === "function")
-      ? Quickshell.iconPath("application-x-executable", true)
-      : "";
+  var names = [];
+  function addName(n) {
+    if (!n) return;
+    var s = String(n).trim();
+    if (s.length > 0 && names.indexOf(s) === -1) names.push(s);
   }
-  if (name.indexOf("file://") === 0 || name.indexOf("image://") === 0) {
-    return name;
+  addName(name);
+  if (Array.isArray(candidates)) {
+    for (var i = 0; i < candidates.length; i++) addName(candidates[i]);
   }
-  if (name.charAt(0) === "/") {
-    return "file://" + name;
+  if (name) {
+    addName(name.toLowerCase());
+    addName(cleanAppId(name));
   }
-  if (appLibrary && typeof appLibrary.iconSource === "function") {
-    var src = appLibrary.iconSource(name);
-    if (src && src.length > 0) return src;
+
+  function isGearIcon(src) {
+    return !src || String(src).indexOf("application-x-executable") !== -1;
   }
+
+  // 1. Direct candidate lookups
+  for (var k = 0; k < names.length; k++) {
+    var cand = names[k];
+    if (cand.indexOf("file://") === 0 || cand.indexOf("image://") === 0) return cand;
+    if (cand.charAt(0) === "/") return "file://" + cand;
+
+    if (appLibrary && appLibrary.iconIndex && typeof appLibrary.iconIndex === "object") {
+      var direct = appLibrary.iconIndex[cand] || appLibrary.iconIndex[cand.toLowerCase()];
+      if (direct) return "file://" + direct;
+    }
+
+    if (Quickshell && typeof Quickshell.iconPath === "function") {
+      var themed = Quickshell.iconPath(cand, true);
+      if (themed && themed.length > 0 && !isGearIcon(themed)) return themed;
+    }
+
+    if (appLibrary && typeof appLibrary.iconSource === "function") {
+      var src = appLibrary.iconSource(cand);
+      if (src && src.length > 0 && !isGearIcon(src)) return src;
+    }
+  }
+
+  // 2. Fuzzy prefix/substring match in appLibrary.iconIndex
+  if (appLibrary && appLibrary.iconIndex && typeof appLibrary.iconIndex === "object") {
+    var iconKeys = Object.keys(appLibrary.iconIndex);
+    for (var m = 0; m < names.length; m++) {
+      var base = cleanAppId(names[m]);
+      if (!base || base.length < 3) continue;
+      for (var ik = 0; ik < iconKeys.length; ik++) {
+        var key = iconKeys[ik];
+        var cleanKey = cleanAppId(key);
+        if (cleanKey === base || key.indexOf(base + "-") === 0 || key.indexOf("-" + base) !== -1) {
+          return "file://" + appLibrary.iconIndex[key];
+        }
+      }
+    }
+  }
+
+  // 3. Fallback to generic executable icon
   if (Quickshell && typeof Quickshell.iconPath === "function") {
-    var themed = Quickshell.iconPath(name, true);
-    if (themed && themed.length > 0) return themed;
     return Quickshell.iconPath("application-x-executable", true);
   }
   return name;
 }
 
-function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, customPinned) {
+function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, customPinned, metadata) {
   var pinnedConfig = Array.isArray(customPinned)
     ? customPinned
     : defaultPinnedApps;
@@ -246,7 +371,7 @@ function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, custo
     var entry = findDesktopEntry(desktopEntries, pinId);
     var displayName = (entry && entry.name) ? entry.name : (pin.name || pinId);
     var rawIcon = (entry && entry.icon) ? entry.icon : (pin.icon || pinId);
-    var resolvedIcon = resolveIcon(rawIcon, appLibrary, Quickshell);
+    var resolvedIcon = resolveIcon(rawIcon, appLibrary, Quickshell, [pinId]);
 
     var appWindows = [];
     var isFocused = false;
@@ -255,7 +380,7 @@ function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, custo
       if (matchedWindows[w]) continue;
       var win = windowList[w];
       if (!win) continue;
-      if (entryMatchesWindow(entry, pinId, win)) {
+      if (entryMatchesWindow(entry, pinId, win, metadata)) {
         appWindows.push(win);
         matchedWindows[w] = true;
         if (win.activated) {
@@ -288,16 +413,18 @@ function buildDockItems(toplevels, desktopEntries, appLibrary, Quickshell, custo
     if (!toplevel) continue;
     if (toplevel.parent) continue;
 
-    var rawAppId = String(toplevel.appId || toplevel.initialClass || toplevel.class || "").trim();
+    var info = windowMetadata(toplevel, metadata);
+    var rawAppId = String(toplevel.appId || (info && (info.initialClass || info.windowClass)) || toplevel.initialClass || toplevel.class || "").trim();
     if (!rawAppId) continue;
-    var dEntry = findDesktopEntry(desktopEntries, rawAppId);
+    var dEntry = findDesktopEntry(desktopEntries, rawAppId, toplevel, metadata);
     var normKey = normalizeId((dEntry && dEntry.id) ? dEntry.id : rawAppId);
     if (!normKey) normKey = rawAppId || ("win_" + k);
 
     if (!runningMap[normKey]) {
-      var name = (dEntry && dEntry.name) ? dEntry.name : (toplevel.title || rawAppId);
+      var name = (dEntry && dEntry.name) ? dEntry.name : (toplevel.title || (info && info.title) || rawAppId);
       var icn = (dEntry && dEntry.icon) ? dEntry.icon : rawAppId;
-      var iconPath = resolveIcon(icn, appLibrary, Quickshell);
+      var iconCandidates = windowAliases(toplevel, metadata);
+      var iconPath = resolveIcon(icn, appLibrary, Quickshell, iconCandidates);
 
       runningMap[normKey] = {
         key: "run_" + normKey,
