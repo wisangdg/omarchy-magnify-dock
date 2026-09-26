@@ -51,7 +51,7 @@ for (const [, body] of clicks) {
         activations++;
       },
     };
-    new Function('root', 'DockModel', 'item', 'Util', 'DesktopEntries', body)(root, model, item, {}, {});
+    new Function('root', 'DockModel', 'item', 'Util', 'DesktopEntries', 'Hyprland', body)(root, model, item, {}, {}, {});
     assert.equal(activations, 1);
     // Keyboard/external focus changes must also dismiss an existing picker.
     root.pickerOpen = true;

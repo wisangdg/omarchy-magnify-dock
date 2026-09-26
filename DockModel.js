@@ -57,9 +57,33 @@ function pickerRows(item, metadata) {
   });
 }
 
-function activateWindow(win) {
-  if (!win || typeof win.activate !== "function") return;
-  try { win.activate(); } catch (e) {}
+// Quickshell's HyprlandToplevel.address returns the address in hex without a
+// "0x" prefix, while Hyprland's focuswindow matcher expects the 0x form.
+function hyprlandAddressFor(win, hypr) {
+  if (!win || !hypr || !hypr.toplevels) return "";
+  var list = toArray(hypr.toplevels.values);
+  for (var i = 0; i < list.length; i++) {
+    var toplevel = list[i];
+    if (toplevel && toplevel.wayland === win && toplevel.address) {
+      var addr = String(toplevel.address);
+      return addr.indexOf("0x") === 0 ? addr : "0x" + addr;
+    }
+  }
+  return "";
+}
+
+function activateWindow(win, hypr) {
+  if (!win) return;
+  var address = hyprlandAddressFor(win, hypr);
+  if (address && hypr && typeof hypr.dispatch === "function") {
+    var command = hypr.usingLua
+      ? 'hl.dsp.focus({ window = "address:' + address + '" })'
+      : "focuswindow address:" + address;
+    try { hypr.dispatch(command); return; } catch (e) {}
+  }
+  if (typeof win.activate === "function") {
+    try { win.activate(); } catch (e) {}
+  }
 }
 
 var defaultPinnedApps = [
@@ -476,7 +500,18 @@ function resolveLaunchId(item, desktopEntries) {
   return rawId;
 }
 
-function handleItemClick(item, Util, appLibrary, desktopEntries) {
+function launchCommand(launchId, entry) {
+  // UWSM expands Exec fields, Terminal and Path without a second GTK launcher.
+  // Services survive dock reloads; Type=exec still reports failure to start.
+  // ponytail: unusual IDs/Exec-less entries keep GTK; extend only with parser parity tests.
+  if (/^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/.test(launchId)
+      && entry && entry.command && entry.command.length > 0) {
+    return ["uwsm-app", "-t", "service", "--", launchId + ".desktop"];
+  }
+  return ["uwsm-app", "-t", "scope", "--", "gtk-launch", launchId + ".desktop"];
+}
+
+function handleItemClick(item, Util, appLibrary, desktopEntries, launcher, hypr) {
   if (!item) return;
 
   if (item.isRunning && item.windows && item.windows.length > 0) {
@@ -494,15 +529,13 @@ function handleItemClick(item, Util, appLibrary, desktopEntries) {
     if (activeIdx !== -1) {
       if (windows.length > 1) {
         var nextIdx = (activeIdx + 1) % windows.length;
-        if (windows[nextIdx] && typeof windows[nextIdx].activate === "function") {
-          windows[nextIdx].activate();
-        }
+        activateWindow(windows[nextIdx], hypr);
       }
       return;
     }
     for (var j = 0; j < windows.length; j++) {
-      if (windows[j] && typeof windows[j].activate === "function") {
-        windows[j].activate();
+      if (windows[j]) {
+        activateWindow(windows[j], hypr);
         return;
       }
     }
@@ -513,6 +546,14 @@ function handleItemClick(item, Util, appLibrary, desktopEntries) {
   if (!launchId) return;
 
   var appName = item.name || launchId;
+  if (launcher) {
+    var existing = [];
+    for (var w = 0; w < toArray(item.windows).length; w++) {
+      if (item.windows[w]) existing.push(item.windows[w]);
+    }
+    var entry = item.desktopEntry || findDesktopEntry(desktopEntries, launchId);
+    return launcher.requestLaunch(launchId, appName, existing, launchCommand(launchId, entry));
+  }
 
   if (appLibrary && typeof appLibrary.launch === "function") {
     try {
@@ -526,12 +567,12 @@ function handleItemClick(item, Util, appLibrary, desktopEntries) {
   }
 }
 
-function closeAppWindow(item) {
-  if (!item || !item.windows || item.windows.length === 0) return;
+function selectedAppWindow(item) {
+  if (!item || !item.windows || item.windows.length === 0) return null;
   var target = null;
   for (var i = 0; i < item.windows.length; i++) {
     var win = item.windows[i];
-    if (win && typeof win.close === "function") {
+    if (win) {
       if (!target) target = win;
       if (win.activated) {
         target = win;
@@ -539,9 +580,51 @@ function closeAppWindow(item) {
       }
     }
   }
+  return target;
+}
+
+function forceCloseTarget(item, hypr) {
+  var win = selectedAppWindow(item);
+  var address = hyprlandAddressFor(win, hypr);
+  if (!hypr || !hypr.usingLua || !/^0x[0-9a-f]+$/i.test(address)) return null;
+  var list = toArray(hypr.toplevels.values);
+  for (var i = 0; i < list.length; i++) {
+    var top = list[i];
+    if (top.wayland !== win) continue;
+    var info = top.lastIpcObject || {};
+    var stableId = String(info.stableId || "");
+    var pid = Number(info.pid);
+    if (!/^[0-9a-f]+$/i.test(stableId) || !Number.isInteger(pid) || pid <= 1) return null;
+    return { window: win, address: address, stableId: stableId, pid: pid,
+      title: String(win.title || item.name || "Untitled window") };
+  }
+  return null;
+}
+
+function forceCloseWindow(target, confirmed, hypr) {
+  if (!confirmed || !target || !hypr || typeof hypr.dispatch !== "function") return false;
+  var live = forceCloseTarget({ windows: [target.window] }, hypr);
+  if (!live || live.address !== target.address || live.stableId !== target.stableId || live.pid !== target.pid) return false;
+  var command = 'function() local w = hl.get_window("address:' + live.address
+    + '"); if w and string.format("%x", w.stable_id) == "' + live.stableId
+    + '" and w.pid == ' + live.pid
+    + ' then return hl.dispatch(hl.dsp.window.kill({ window = w })) end end';
+  try { hypr.dispatch(command); return true; } catch (e) { return false; }
+}
+
+function closeAppWindow(item, hypr) {
+  var target = selectedAppWindow(item);
   // Close the focused window, or the first available window if this app is
   // unfocused. A failed close must never cascade into closing other windows.
-  if (target) {
+  if (!target) return;
+  var address = hyprlandAddressFor(target, hypr);
+  if (/^0x[0-9a-f]+$/i.test(address) && hypr && typeof hypr.dispatch === "function") {
+    var command = hypr.usingLua
+      ? 'hl.dsp.window.close({ window = "address:' + address + '" })'
+      : "closewindow address:" + address;
+    try { hypr.dispatch(command); return; } catch (e) {}
+  }
+  if (typeof target.close === "function") {
     try { target.close(); } catch (e) {}
   }
 }

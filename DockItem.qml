@@ -20,6 +20,7 @@ Item {
   property bool isDockHovered: false
   property bool isHovered: false
   property bool reduceMotion: false
+  property bool isLaunching: false
   property real bounceY: 0
   property real pressScale: (mouseArea.pressed && !root.isBeingDragged) ? 0.94 : 1.0
 
@@ -82,6 +83,11 @@ Item {
   }
 
   onIsRunningChanged: if (root.isRunning) root.settleLaunchAnimation()
+  onIsLaunchingChanged: {
+    if (root.isLaunching && !root.isRunning) root.beginLaunchAnimation()
+    else root.settleLaunchAnimation()
+  }
+  Component.onCompleted: if (root.isLaunching && !root.isRunning) root.beginLaunchAnimation()
 
   // SmoothedAnimation is designed to follow a continuously changing target.
   // Unlike a new NumberAnimation per pointer event, it preserves velocity.
@@ -264,7 +270,6 @@ Item {
           }
           if (root.isPressed) {
             root.isPressed = false
-            if (!root.isRunning) root.beginLaunchAnimation()
             root.clicked(root.itemData)
           }
         }

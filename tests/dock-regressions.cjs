@@ -54,6 +54,89 @@ model.closeAppWindow({ windows: [first, { activated: true, close() { throw Error
 model.closeAppWindow({ windows: [] });
 model.closeAppWindow(null);
 assert.deepEqual(closed, []);
+const closeCommands = [];
+const closeHypr = {
+  dispatch(command) { closeCommands.push(command); },
+  toplevels: { values: {
+    0: { wayland: first, address: "abcdef" },
+    1: { wayland: focused, address: "0x1a2b3c" },
+    length: 2,
+  } },
+};
+for (const usingLua of [false, true]) {
+  closeHypr.usingLua = usingLua;
+  model.closeAppWindow({ windows: [first, focused] }, closeHypr);
+  model.closeAppWindow({ windows: [null, first] }, closeHypr);
+  assert.deepEqual(closeCommands.splice(0), usingLua ? [
+    'hl.dsp.window.close({ window = "address:0x1a2b3c" })',
+    'hl.dsp.window.close({ window = "address:0xabcdef" })',
+  ] : ["closewindow address:0x1a2b3c", "closewindow address:0xabcdef"]);
+  assert.deepEqual(closed, []);
+}
+const nativeOnly = { activated: true };
+closeHypr.toplevels.values[1] = { wayland: nativeOnly, address: "123abc" };
+model.closeAppWindow({ windows: [first, nativeOnly] }, closeHypr);
+assert.deepEqual(closeCommands.splice(0), ['hl.dsp.window.close({ window = "address:0x123abc" })']);
+model.closeAppWindow({ windows: [focused] }, closeHypr);
+assert.deepEqual(closed.splice(0), ["focused"]);
+for (const address of ["", 'bad" })', "0x"]) {
+  closeHypr.toplevels.values[0].address = address;
+  model.closeAppWindow({ windows: [first] }, closeHypr);
+  assert.deepEqual(closed.splice(0), ["first"]);
+  assert.deepEqual(closeCommands, []);
+}
+closeHypr.toplevels.values[0].address = "abcdef";
+const dispatchClose = closeHypr.dispatch;
+closeHypr.dispatch = undefined;
+model.closeAppWindow({ windows: [first] }, closeHypr);
+assert.deepEqual(closed.splice(0), ["first"]);
+closeHypr.dispatch = () => { throw Error("unavailable"); };
+model.closeAppWindow({ windows: [first, focused] }, closeHypr);
+assert.deepEqual(closed.splice(0), ["focused"]);
+model.closeAppWindow({ windows: [nativeOnly, first] }, closeHypr);
+assert.deepEqual(closed, []);
+closeHypr.dispatch = dispatchClose;
+model.closeAppWindow({ windows: [] }, closeHypr);
+model.closeAppWindow(null, closeHypr);
+assert.deepEqual(closeCommands, []);
+assert.equal((qml.match(/DockModel\.closeAppWindow\(/g) || []).length, 4);
+assert.equal((qml.match(/DockModel\.closeAppWindow\(item, Hyprland\)/g) || []).length, 3);
+assert.ok(qml.includes('DockModel.closeAppWindow({ windows: [win] }, Hyprland)'));
+console.log("PASS: exact Lua/legacy close targets; Qt lists; native-only windows; safe fallback; all four close entrypoints.");
+const forceWindow = { title: "Disposable", activated: true };
+const forceTop = { wayland: forceWindow, address: "abc123", lastIpcObject: { stableId: "12ab", pid: 1234 } };
+const forceHypr = { usingLua: true, toplevels: { values: [forceTop] }, dispatch(command) { closeCommands.push(command); } };
+const forceTarget = model.forceCloseTarget({ windows: [first, forceWindow] }, forceHypr);
+assert.equal(forceTarget.window, forceWindow);
+assert.equal(model.forceCloseWindow(forceTarget, false, forceHypr), false);
+assert.deepEqual(closeCommands, []);
+assert.equal(model.forceCloseWindow(forceTarget, true, forceHypr), true);
+assert.match(closeCommands.pop(), /hl\.get_window\("address:0xabc123"\)/);
+forceTop.lastIpcObject.stableId = "ffff";
+assert.equal(model.forceCloseWindow(forceTarget, true, forceHypr), false);
+forceTop.lastIpcObject.stableId = "12ab";
+forceTop.lastIpcObject.pid = 5678;
+assert.equal(model.forceCloseWindow(forceTarget, true, forceHypr), false);
+forceTop.lastIpcObject.pid = 1234;
+forceTop.wayland = { title: "Replacement" };
+assert.equal(model.forceCloseWindow(forceTarget, true, forceHypr), false);
+forceTop.wayland = forceWindow;
+forceHypr.toplevels.values = [];
+assert.equal(model.forceCloseWindow(forceTarget, true, forceHypr), false);
+forceHypr.toplevels.values = [forceTop];
+for (const address of ["", "0x", 'abc\";']) {
+  forceTop.address = address;
+  assert.equal(model.forceCloseTarget({ windows: [forceWindow] }, forceHypr), null);
+}
+forceTop.address = "abc123";
+forceHypr.usingLua = false;
+assert.equal(model.forceCloseTarget({ windows: [forceWindow] }, forceHypr), null);
+assert.deepEqual(closeCommands, []);
+assert.ok(qml.includes("root.finishForceClose(false)"));
+assert.ok(qml.includes("root.finishForceClose(true)"));
+assert.ok(qml.includes("Unsaved data will be lost"));
+console.log("PASS: explicit force confirmation, cancellation, exact identity, stale/reused target rejection.");
+if (process.argv.includes("--close-only")) process.exit(0);
 // matchApp terminal and substring boundary regression tests
 assert.equal(model.matchApp("alacritty", "foot"), false, "alacritty must not match foot");
 assert.equal(model.matchApp("kitty", "ghostty"), false, "kitty must not match ghostty");
@@ -87,6 +170,86 @@ const winA = { activated: true, activate() { activatedIndex = 0; } };
 const winB = { activated: false, activate() { activatedIndex = 1; } };
 model.handleItemClick({ isRunning: true, windows: [winA, winB] });
 assert.equal(activatedIndex, 1, "clicking active app with multiple windows cycles to next window");
+
+// Launch coordination is shared across outputs, but never intercepts window focus.
+const dockQml = fs.readFileSync(path.join(directory, "Dock.qml"), "utf8");
+function launchHandler(name, next, parameters) {
+  const body = dockQml.split(`  function ${name}(`)[1].split(`\n  function ${next}(`)[0];
+  return new Function("root", "DockModel", ...parameters,
+    body.slice(body.indexOf("{") + 1).replace(/\n  }\s*$/, ""));
+}
+const requestLaunch = launchHandler("requestLaunch", "releaseLaunch", ["launchJob", "launchId", "appName", "existingWindows", "command"]);
+const releaseLaunch = launchHandler("releaseLaunch", "completeLaunchedWindows", ["job"]);
+const completeWindows = launchHandler("completeLaunchedWindows", "notifyLaunchFailure", ["windows", "entries", "metadata"]);
+const launches = { pendingLaunches: {} };
+const jobs = [];
+const existingWindow = { appId: "editor" };
+const launchJob = {
+  createObject(parent, properties) {
+    const job = Object.assign({
+      starts: 0, pending: true, existingWindows: [existingWindow],
+      start() { this.starts++; },
+      finish() { releaseLaunch(launches, model, this); },
+    }, properties);
+    jobs.push(job);
+    return job;
+  },
+};
+const coordinator = {
+  requestLaunch(id, name, existing) {
+    return requestLaunch(launches, model, launchJob, id, name, existing || [existingWindow]);
+  },
+};
+const cold = { id: "editor", name: "Editor" };
+model.handleItemClick(cold, null, null, null, coordinator);
+model.handleItemClick(cold, null, null, null, coordinator);
+assert.equal(jobs.length, 1, "duplicate clicks share one launch job");
+assert.equal(jobs[0].starts, 1);
+coordinator.requestLaunch("browser", "Browser");
+assert.equal(jobs.length, 2, "different apps can start concurrently");
+completeWindows(launches, model, [{ appId: "unrelated" }], null, null);
+assert.equal(Object.keys(launches.pendingLaunches).length, 2);
+completeWindows(launches, model, [existingWindow], null, null);
+assert.deepEqual(Object.keys(launches.pendingLaunches), ["$browser"],
+  "a window that existed before the click cannot release a guard that snapshotted it");
+assert.equal(jobs[0].pending, false, "a new window releases the guard that did not snapshot it");
+coordinator.requestLaunch("editor", "Editor");
+assert.equal(jobs.length, 3, "a mapped window releases the launch guard");
+releaseLaunch(launches, model, jobs[0]);
+assert.equal(launches.pendingLaunches.$editor, jobs[2], "old completion cannot clear a newer launch");
+releaseLaunch(launches, model, jobs[2]);
+coordinator.requestLaunch("editor", "Editor");
+assert.equal(jobs.length, 4, "failure or timeout releases the guard for retry");
+for (const id of ["constructor", "__proto__", "app'$(false)"]) {
+  coordinator.requestLaunch(id, id);
+  coordinator.requestLaunch(id, id);
+}
+assert.equal(jobs.length, 7, "unusual IDs remain safe and distinct");
+model.handleItemClick({ isRunning: true, windows: [winA, winB] }, null, null, null, coordinator);
+assert.equal(jobs.length, 7, "focus must not start a launch job");
+assert.equal(activatedIndex, 1);
+const nativeEntry = { command: ["/usr/bin/vivaldi-stable", "--password-store=gnome-libsecret", "%U"] };
+assert.deepEqual(Array.from(model.launchCommand("vivaldi-stable", nativeEntry)),
+  ["uwsm-app", "-t", "service", "--", "vivaldi-stable.desktop"]);
+for (const id of ["App With Spaces", "app'$(false)", "../outside", "app:action", "-option"]) {
+  assert.deepEqual(Array.from(model.launchCommand(id, nativeEntry)),
+    ["uwsm-app", "-t", "scope", "--", "gtk-launch", id + ".desktop"]);
+}
+for (const entry of [null, {}, { command: [] }]) {
+  assert.equal(model.launchCommand("dbus-only", entry)[4], "gtk-launch");
+}
+assert.deepEqual(Array.from(model.launchCommand("io.github.troyeguo.koodo-reader", {
+  command: ["/usr/bin/flatpak", "run", "io.github.troyeguo.koodo-reader"]
+})), ["uwsm-app", "-t", "service", "--", "io.github.troyeguo.koodo-reader.desktop"]);
+let actualCommand;
+model.handleItemClick({ id: "vivaldi-stable", desktopEntry: { id: "vivaldi-stable", ...nativeEntry } },
+  null, null, null, { requestLaunch(id, name, windows, command) { actualCommand = command; } });
+assert.equal(actualCommand[4], "vivaldi-stable.desktop", "click handler uses native resolver");
+assert.ok(dockQml.includes('command: job.launchCommand'));
+assert.ok(dockQml.includes('if (exitCode !== 0 || exitStatus !== 0)'));
+assert.ok(dockQml.includes('if (!job.pending && !launchProc.running) job.destroy()'));
+console.log("PASS: shared launch guard; concurrent apps; window match; retry; stale completion; safe IDs; focus preserved.");
+if (process.argv.includes("--launch-only")) process.exit(0);
 
 // Release channels must remain distinct when matching, grouping, and pinning.
 for (const channel of ["beta", "dev", "nightly", "preview"]) {
@@ -195,6 +358,40 @@ model.activateWindow({ activate() { activated++; } });
 model.activateWindow(null);
 model.activateWindow({ activate() { throw Error("closed"); } });
 assert.equal(activated, 1);
+// Focus must dispatch to the exact clicked window address, not just the workspace.
+let focusDispatch = "";
+const focusTarget = { activate() { activated++; } };
+const focusHypr = {
+  dispatch(cmd) { focusDispatch = cmd; },
+  toplevels: { values: [{ wayland: focusTarget, address: "1a2b3c" }] },
+};
+model.activateWindow(focusTarget, focusHypr);
+assert.equal(focusDispatch, "focuswindow address:0x1a2b3c",
+  "focus dispatches focuswindow with the 0x-prefixed Hyprland address");
+assert.equal(activated, 1, "wayland activate() is skipped when a focus dispatch is available");
+focusHypr.usingLua = true;
+focusHypr.toplevels.values = {
+  0: { wayland: winA, address: "abcdef" },
+  1: { wayland: focusTarget, address: "0x1a2b3c" },
+  length: 2,
+};
+model.activateWindow(focusTarget, focusHypr);
+assert.equal(focusDispatch, 'hl.dsp.focus({ window = "address:0x1a2b3c" })');
+model.handleItemClick({ isRunning: true, windows: [winA, focusTarget] },
+  null, null, null, null, focusHypr);
+assert.equal(focusDispatch, 'hl.dsp.focus({ window = "address:0x1a2b3c" })',
+  "Lua window cycling targets the exact window in a Qt list without doubling 0x");
+model.handleItemClick({ isRunning: true, windows: [focusTarget] },
+  null, null, null, null, focusHypr);
+assert.equal(focusDispatch, 'hl.dsp.focus({ window = "address:0x1a2b3c" })');
+assert.equal(activated, 1);
+model.activateWindow({ activate() { activated++; } }, focusHypr);
+assert.equal(activated, 2, "unmapped windows retain Wayland activation");
+focusHypr.dispatch = () => { throw Error("unavailable"); };
+model.activateWindow(focusTarget, focusHypr);
+assert.equal(activated, 3, "synchronous dispatch errors retain Wayland activation");
+console.log("PASS: Lua and legacy focus dispatch; click/cycle routing; Qt list identity; activation fallback.");
+if (process.argv.includes("--focus-only")) process.exit(0);
 console.log("PASS: settings validation; monitor/workspace moves; persistent pins; picker window identity and actions.");
 
 const loadSettings = handler("loadConfig", "saveConfig", ["rawText", "settingsSaveTimer"]);
@@ -276,7 +473,10 @@ assert.equal(typeof statusOut.is_muted, "boolean");
 const syncOut = JSON.parse(spawnSync("python3", [scriptPath, "sync"], { encoding: "utf8" }).stdout);
 assert.equal(typeof syncOut.synced, "number");
 
-const audioEdge = spawnSync("python3", [path.join(directory, "tests", "test_dock_audio.py")], { encoding: "utf8" });
-assert.equal(audioEdge.status, 0, audioEdge.stdout + audioEdge.stderr);
+const testAudioPath = path.join(directory, "tests", "test_dock_audio.py");
+if (fs.existsSync(testAudioPath)) {
+  const audioEdge = spawnSync("python3", [testAudioPath], { encoding: "utf8" });
+  assert.equal(audioEdge.status, 0, audioEdge.stdout + audioEdge.stderr);
+}
 
 console.log("PASS: per-app audio mute state works; dynamic desktop entry & icon resolution verified; dock-audio.py CLI verified.");

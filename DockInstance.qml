@@ -17,6 +17,7 @@ Item {
   property var shell: null
   property var manifest: null
   property var dockScreen: null
+  property var launcher: null
   property var appLibrary: shell ? shell.appLibrary : null
 
   // Sleek macOS Dock Dimensions & Spacing
@@ -56,7 +57,22 @@ Item {
   property real pickerAnchorY: 0
   readonly property var hyprMonitor: root.dockScreen ? Hyprland.monitorFor(root.dockScreen) : null
   readonly property var activeWorkspace: root.hyprMonitor ? root.hyprMonitor.activeWorkspace : null
-  readonly property bool popupOpen: root.contextMenuOpen || root.pickerOpen || root.settingsOpen
+  property var forceCloseTarget: null
+  readonly property bool popupOpen: root.contextMenuOpen || root.pickerOpen || root.settingsOpen || root.forceCloseTarget !== null
+
+  function requestForceClose(item) {
+    root.forceCloseTarget = DockModel.forceCloseTarget(item, Hyprland)
+    if (root.forceCloseTarget) root.revealDock()
+  }
+
+  function finishForceClose(confirmed) {
+    var target = root.forceCloseTarget
+    root.forceCloseTarget = null
+    if (confirmed && !DockModel.forceCloseWindow(target, true, Hyprland)) {
+      console.warn("Dock: Force Close canceled; selected window is no longer available")
+    }
+    root.scheduleDockHide()
+  }
 
   onActiveWorkspaceChanged: Qt.callLater(root.rebuildDock)
   onHyprMonitorChanged: Qt.callLater(root.rebuildDock)
@@ -572,6 +588,7 @@ Item {
         workspaceName: win.workspace ? win.workspace.name : ""
       }
     })
+    if (root.launcher) root.launcher.completeLaunchedWindows(toplevels, DesktopEntries, root.windowMetadata)
     var visibleWindows = DockModel.filterWindows(toplevels, root.windowMetadata,
       root.preferences.windowScope, root.dockScreen ? root.dockScreen.name : "",
       root.activeWorkspace ? root.activeWorkspace.id : null)
@@ -1000,10 +1017,121 @@ Item {
         }
         onWindowActivated: function(win) {
           root.dismissAppPopups()
-          DockModel.activateWindow(win)
+          DockModel.activateWindow(win, Hyprland)
         }
-        onWindowClosed: function(win) { DockModel.closeAppWindow({ windows: [win] }) }
+        onWindowClosed: function(win) { DockModel.closeAppWindow({ windows: [win] }, Hyprland) }
         onDismissed: root.closePicker()
+      }
+    }
+
+    PopupWindow {
+      id: forceCloseWindow
+      visible: root.forceCloseTarget !== null
+      color: "transparent"
+      implicitWidth: forceCloseCard.width
+      implicitHeight: forceCloseCard.height
+      anchor {
+        window: dockPanel
+        adjustment: PopupAdjustment.Slide
+        edges: Edges.Top | Edges.Left
+        gravity: Edges.Bottom | Edges.Right
+        rect.x: Math.round((dockPanel.width - forceCloseWindow.implicitWidth) / 2)
+        rect.y: Math.round(dockPanel.height - root.capsuleHeight - forceCloseWindow.implicitHeight - 16)
+        rect.width: 1
+        rect.height: 1
+      }
+
+      Rectangle {
+        id: forceCloseCard
+        width: 360
+        height: forceCloseCol.implicitHeight + 28
+        radius: 12
+        color: Util.alpha(Color.background, 0.98)
+        border.color: Util.alpha(Color.urgent, 0.6)
+        border.width: 1
+
+        Column {
+          id: forceCloseCol
+          anchors.fill: parent
+          anchors.margins: 14
+          spacing: 12
+
+          Text {
+            width: parent.width
+            text: "Force Close Window?"
+            color: Color.urgent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            font.bold: true
+          }
+
+          Text {
+            width: parent.width
+            text: root.forceCloseTarget
+              ? "Force close “" + root.forceCloseTarget.title + "”?\nUnsaved data will be lost. Other windows in the same process may also close."
+              : ""
+            color: Color.foreground
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+          }
+
+          Row {
+            anchors.right: parent.right
+            spacing: 8
+
+            Rectangle {
+              width: 80
+              height: 28
+              radius: 6
+              color: cancelMouse.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
+              border.color: Util.alpha(Color.foreground, 0.25)
+              border.width: 1
+
+              Text {
+                anchors.centerIn: parent
+                text: "Cancel"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              MouseArea {
+                id: cancelMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.finishForceClose(false)
+              }
+            }
+
+            Rectangle {
+              width: 100
+              height: 28
+              radius: 6
+              color: confirmMouse.containsMouse ? Util.alpha(Color.urgent, 0.3) : Util.alpha(Color.urgent, 0.18)
+              border.color: Color.urgent
+              border.width: 1
+
+              Text {
+                anchors.centerIn: parent
+                text: "Force Close"
+                color: Color.urgent
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              MouseArea {
+                id: confirmMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.finishForceClose(true)
+              }
+            }
+          }
+        }
       }
     }
 
@@ -1070,13 +1198,15 @@ Item {
         isAudioMuted: root.isAppAudioMuted(root.contextTarget)
 
         onLaunchClicked: function(item) {
-          DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
+          DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries, root.launcher, Hyprland)
         }
         onPinToggled: function(item) {
           if (item && item.id) root.togglePinApp(item.id)
         }
+        canForceClose: DockModel.forceCloseTarget(root.contextTarget, Hyprland) !== null
+        onForceCloseClicked: function(item) { root.requestForceClose(item) }
         onQuitClicked: function(item) {
-          DockModel.closeAppWindow(item)
+          DockModel.closeAppWindow(item, Hyprland)
         }
         onMuteAudioToggled: function(item) {
           root.toggleAppAudio(item)
@@ -1276,6 +1406,7 @@ Item {
             required property int index
 
             itemData: modelData
+            isLaunching: !!(root.launcher && root.launcher.pendingLaunches["$" + DockModel.resolveLaunchId(modelData, DesktopEntries)])
             itemIndex: index
             baseSize: root.baseIconSize
             iconSize: root.iconPixelSize
@@ -1291,7 +1422,7 @@ Item {
 
             onClicked: function(item) {
               root.dismissAppPopups()
-              DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
+              DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries, root.launcher, Hyprland)
             }
 
             onPinToggleRequested: function(item) {
@@ -1301,7 +1432,7 @@ Item {
             }
 
             onCloseRequested: function(item) {
-              DockModel.closeAppWindow(item)
+              DockModel.closeAppWindow(item, Hyprland)
             }
 
             onContextMenuRequested: function(item, srcItem) {
@@ -1351,6 +1482,7 @@ Item {
             required property int index
 
             itemData: modelData
+            isLaunching: !!(root.launcher && root.launcher.pendingLaunches["$" + DockModel.resolveLaunchId(modelData, DesktopEntries)])
             itemIndex: (root.dockData.pinned ? root.dockData.pinned.length : 0) + index
             baseSize: root.baseIconSize
             iconSize: root.iconPixelSize
@@ -1362,7 +1494,7 @@ Item {
 
             onClicked: function(item) {
               root.dismissAppPopups()
-              DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries)
+              DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries, root.launcher, Hyprland)
             }
 
             onPinToggleRequested: function(item) {
@@ -1372,7 +1504,7 @@ Item {
             }
 
             onCloseRequested: function(item) {
-              DockModel.closeAppWindow(item)
+              DockModel.closeAppWindow(item, Hyprland)
             }
 
             onContextMenuRequested: function(item, srcItem) {

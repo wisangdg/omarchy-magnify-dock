@@ -16,6 +16,8 @@ Rectangle {
   readonly property bool containsPointer: menuHover.hovered
 
   signal pinToggled(var item)
+  property bool canForceClose: false
+  signal forceCloseClicked(var item)
   signal quitClicked(var item)
   signal launchClicked(var item)
   signal muteAudioToggled(var item)
@@ -32,6 +34,8 @@ Rectangle {
 
   width: 190
   height: menuColumn.implicitHeight + 16
+  implicitWidth: 190
+  implicitHeight: menuColumn.implicitHeight + 16
   radius: 12
   color: Util.alpha(Color.background, 0.94)
   border.color: Util.alpha(Color.foreground, 0.18)
@@ -159,7 +163,7 @@ Rectangle {
     Rectangle {
       visible: root.targetItem !== null
       width: parent.width
-      height: 26
+      height: visible ? 26 : 0
       radius: 6
       color: muteMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
 
@@ -223,6 +227,39 @@ Rectangle {
       }
     }
 
+    Rectangle {
+      visible: root.targetItem !== null && root.targetItem.isRunning && root.canForceClose
+      width: parent.width
+      height: 26
+      radius: 6
+      color: forceMouse.containsMouse ? Util.alpha(Color.urgent, 0.2) : "transparent"
+
+      Row {
+        anchors.fill: parent
+        anchors.leftMargin: 8
+        spacing: 8
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "󰅙  Force Close…"
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          color: Color.urgent
+        }
+      }
+
+      MouseArea {
+        id: forceMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: {
+          var item = root.targetItem
+          root.menuClosed()
+          root.forceCloseClicked(item)
+        }
+      }
+    }
+
     // Divider
     Rectangle {
       width: parent.width
@@ -230,10 +267,36 @@ Rectangle {
       color: Util.alpha(Color.foreground, 0.12)
     }
 
-    Button {
+    // Dock Settings Action
+    Rectangle {
       width: parent.width
-      text: "Dock Settings…"
-      onClicked: root.settingsRequested()
+      height: 26
+      radius: 6
+      color: settingsMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+
+      Row {
+        anchors.fill: parent
+        anchors.leftMargin: 8
+        spacing: 8
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "󰒓  Dock Settings…"
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          color: Color.foreground
+        }
+      }
+
+      MouseArea {
+        id: settingsMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: {
+          root.menuClosed()
+          root.settingsRequested()
+        }
+      }
     }
 
     // Auto-hide Toggle
