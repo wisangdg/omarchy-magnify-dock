@@ -173,6 +173,10 @@ assert.equal(activatedIndex, 1, "clicking active app with multiple windows cycle
 
 // Launch coordination is shared across outputs, but never intercepts window focus.
 const dockQml = fs.readFileSync(path.join(directory, "Dock.qml"), "utf8");
+assert.ok(dockQml.includes("Util.execDetached(cmd)"),
+  "seen marks persist through Util.execDetached, which runs the shell string");
+assert.ok(!/Quickshell\.execDetached\(cmd\)/.test(dockQml),
+  "Quickshell.execDetached takes an argv list and never runs shell strings");
 function launchHandler(name, next, parameters) {
   const body = dockQml.split(`  function ${name}(`)[1].split(`\n  function ${next}(`)[0];
   return new Function("root", "DockModel", ...parameters,
@@ -480,3 +484,42 @@ if (fs.existsSync(testAudioPath)) {
 }
 
 console.log("PASS: per-app audio mute state works; dynamic desktop entry & icon resolution verified; dock-audio.py CLI verified.");
+
+// Window preview and notification badge toggles default on and stay backward compatible.
+assert.equal(model.normalizeSettings(null).showWindowPreviews, true);
+assert.equal(model.normalizeSettings(null).showNotificationBadges, true);
+assert.equal(model.normalizeSettings({ showWindowPreviews: false }).showWindowPreviews, false);
+assert.equal(model.normalizeSettings({ showNotificationBadges: false }).showNotificationBadges, false);
+assert.equal(model.normalizeSettings({ iconSize: 40 }).showNotificationBadges, true);
+
+// Badges match a notification's app name against both name and id, without
+// double counting the same app reported under two keys.
+const notifCounts = { Thunderbird: 2, "org.mozilla.Thunderbird": 1, espanso: 4 };
+assert.equal(model.notificationCountFor(notifCounts, { name: "Thunderbird", id: "org.mozilla.Thunderbird" }), 3);
+assert.equal(model.notificationCountFor(notifCounts, { name: "Espanso", id: "espanso" }), 4);
+assert.equal(model.notificationCountFor(notifCounts, { name: "Zed", id: "dev.zed.Zed" }), 0);
+assert.deepEqual(Array.from(model.notificationKeysForItem(notifCounts, { name: "Thunderbird", id: "org.mozilla.Thunderbird" })),
+  ["Thunderbird", "org.mozilla.Thunderbird"]);
+assert.equal(model.notificationCountFor(null, { name: "Thunderbird" }), 0);
+assert.equal(model.notificationCountFor(notifCounts, null), 0);
+
+// dock-notifications.py counts only what arrived after each app's seen mark.
+const notifScript = path.join(directory, "dock-notifications.py");
+const notifState = fs.mkdtempSync(path.join(os.tmpdir(), "dock-notif-"));
+const notifHistory = path.join(notifState, "omarchy", "notifications", "history");
+fs.mkdirSync(notifHistory, { recursive: true });
+for (const [name, entry] of [
+  ["100-1.json", { app: "Thunderbird", timestamp: 100 }],
+  ["200-2.json", { app: "Thunderbird", timestamp: 200 }],
+  ["150-3.json", { app: "espanso", timestamp: 150 }],
+  ["175-4.json", { app: "", timestamp: 175 }],
+]) fs.writeFileSync(path.join(notifHistory, name), JSON.stringify(entry));
+const notifSeen = path.join(notifState, "seen.json");
+const notifEnv = { ...process.env, XDG_STATE_HOME: notifState };
+const countAll = JSON.parse(spawnSync("python3", [notifScript, "count", notifSeen], { encoding: "utf8", env: notifEnv }).stdout);
+assert.deepEqual(countAll.counts, { Thunderbird: 2, espanso: 1 });
+fs.writeFileSync(notifSeen, JSON.stringify({ Thunderbird: 150 }));
+const countSeen = JSON.parse(spawnSync("python3", [notifScript, "count", notifSeen], { encoding: "utf8", env: notifEnv }).stdout);
+assert.deepEqual(countSeen.counts, { Thunderbird: 1, espanso: 1 });
+fs.rmSync(notifState, { recursive: true, force: true });
+console.log("PASS: preview/badge toggles default on; badges dedupe by app; dock-notifications.py counts unread only.");

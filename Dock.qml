@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "DockModel.js" as DockModel
 
 Item {
@@ -12,6 +13,14 @@ Item {
   property var shell: null
   property var manifest: null
   property var pendingLaunches: ({})
+
+  // Unread notification counts keyed by the sender's app name, plus the
+  // per-app "seen" marks used to decide what is unread. Shared by every
+  // output-local dock so one badge is not counted once per monitor.
+  property var notificationCounts: ({})
+  property var notificationSeen: ({})
+  readonly property string notificationSeenPath: Quickshell.env("HOME") + "/.config/omarchy/dock-notifications-seen.json"
+  readonly property string notificationScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/wdg.dock/dock-notifications.py"
 
   function requestLaunch(launchId, appName, existingWindows, command) {
     var key = "$" + launchId
@@ -61,6 +70,82 @@ Item {
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     Quickshell.execDetached(["notify-send", "--app-name=Dock", "--urgency=critical",
       "--", "Could not launch application", text])
+  }
+
+  function loadNotificationSeen(rawText) {
+    try {
+      if (rawText && rawText.trim().length > 0) {
+        var parsed = JSON.parse(rawText)
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          root.notificationSeen = parsed
+          return
+        }
+      }
+    } catch (e) {}
+    root.notificationSeen = ({})
+  }
+
+  function applyNotificationCounts(counts) {
+    root.notificationCounts = (counts && typeof counts === "object" && !Array.isArray(counts))
+      ? counts : ({})
+  }
+
+  // Opening an app clears its badge, macOS-style. Keys already cleared are
+  // dropped from the live map so the badge hides before the watcher replies.
+  function acknowledgeNotifications(item) {
+    if (!item) return
+    var counts = root.notificationCounts || {}
+    var keys = DockModel.notificationKeysForItem(counts, item)
+    if (!keys.length) return
+    var remaining = Object.assign({}, counts)
+    var nextSeen = Object.assign({}, root.notificationSeen)
+    var now = Date.now()
+    for (var i = 0; i < keys.length; i++) {
+      delete remaining[keys[i]]
+      nextSeen[keys[i]] = now
+    }
+    root.notificationCounts = remaining
+    root.notificationSeen = nextSeen
+    root.saveNotificationSeen()
+  }
+
+  function saveNotificationSeen() {
+    var jsonStr = JSON.stringify(root.notificationSeen)
+    var tmpPath = root.notificationSeenPath + ".tmp." + Date.now()
+    var cmd = "printf '%s\\n' " + Util.shellQuote(jsonStr) + " > " + Util.shellQuote(tmpPath)
+      + " && mv " + Util.shellQuote(tmpPath) + " " + Util.shellQuote(root.notificationSeenPath)
+    Util.execDetached(cmd)
+  }
+
+  FileView {
+    id: notificationSeenFile
+    path: root.notificationSeenPath
+    watchChanges: true
+    onFileChanged: reload()
+    printErrors: false
+    onLoaded: root.loadNotificationSeen(text())
+    onLoadFailed: root.loadNotificationSeen("")
+  }
+
+  Process {
+    id: notificationWatch
+    command: ["python3", root.notificationScript, "watch", root.notificationSeenPath]
+    running: true
+    stdout: SplitParser {
+      onRead: function(line) {
+        try {
+          var data = JSON.parse(line)
+          if (data && data.counts) root.applyNotificationCounts(data.counts)
+        } catch (e) {}
+      }
+    }
+    onExited: notificationWatchRestart.restart()
+  }
+
+  Timer {
+    id: notificationWatchRestart
+    interval: 5000
+    onTriggered: if (!notificationWatch.running) notificationWatch.running = true
   }
 
   Component {

@@ -34,6 +34,8 @@ Every animation runs at your monitor's native refresh rate (144Hz, 180Hz, 200Hz+
 * 🪟 **Frosted Glass Floating Capsule** — Beautiful translucent glassmorphism with 3D top specular highlights, subtle borders, and smooth rounded corners ($18\text{px}$) that adapt to your Omarchy theme palette.
 * 🔀 **Fluid Drag-and-Drop Reordering** — Long-click and drag pinned apps along the rail to reorder your favorites. Neighboring icons smoothly part ways in real time, settling with cubic easing upon release.
 * 💡 **Live Running Indicators** — Unobtrusive running dots beneath open applications with real-time active window focus synchronization via Hyprland & Wayland `ToplevelManager`.
+* 🖼️ **Window Preview Thumbnails** — Hover a running app to see each window's title, workspace label, and a static thumbnail captured from the compositor via `hyprland-toplevel-export-v1` (falls back to a glyph where unsupported).
+* 🔔 **Unread Notification Badges** — Per-app badges mirror the Omarchy notification history. Opening an app from the dock clears its badge, macOS-style.
 * ⏱️ **Intelligent Auto-Hide & Edge Reveal** — Keep the dock persistently visible with exclusive tiling space, or enable smooth edge-reveal auto-hide that glides into view when your pointer approaches the bottom edge.
 * 🖱️ **Right-Click Context Menu** — Right-click any icon to bring windows to front, pin/unpin favorites ("Keep in Dock"), close active windows, or toggle dock preferences on the fly.
 * 🖥️ **Native Multi-Monitor Support** — Automatically initializes independent, output-local dock instances across all connected displays without flickering or desync.
@@ -140,7 +142,15 @@ include them once their monitor and workspace are known.
 
 Hovering a running app opens a scrollable window picker after 380 ms. It remains
 open while the pointer moves into the picker, and suspends auto-hide until it
-closes. This release shows titles and workspace labels, without thumbnail capture.
+closes. Each row shows the window title, workspace label, and a static thumbnail
+captured from the compositor (`hyprland-toplevel-export-v1`); where that protocol
+is unavailable the row falls back to an icon. Thumbnails and badges can each be
+turned off in **Dock Settings** (`showWindowPreviews`, `showNotificationBadges`).
+
+Notification badges count Omarchy notifications since the app was last opened
+from the dock (or otherwise acknowledged) — they are not the application's own
+unread count. Marked-as-seen state is stored in
+`~/.config/omarchy/dock-notifications-seen.json`.
 
 ---
 
@@ -150,6 +160,7 @@ This plugin includes an automated regression test suite ensuring zero regression
 
 ```bash
 node tests/dock-regressions.cjs
+node tests/picker-dismissal.cjs
 omarchy plugin validate .
 ```
 

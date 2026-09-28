@@ -51,6 +51,7 @@ Item {
   property string pickerKey: ""
   property string pendingPickerKey: ""
   property string pickerTitle: ""
+  property var pickerItem: null
   property var windowMetadata: []
   property var windowRows: []
   property real pickerAnchorX: 0
@@ -76,6 +77,16 @@ Item {
 
   onActiveWorkspaceChanged: Qt.callLater(root.rebuildDock)
   onHyprMonitorChanged: Qt.callLater(root.rebuildDock)
+
+  function badgeCountFor(item) {
+    if (!root.preferences.showNotificationBadges) return 0
+    var counts = root.launcher ? root.launcher.notificationCounts : null
+    return DockModel.notificationCountFor(counts, item)
+  }
+
+  function acknowledgeNotifications(item) {
+    if (root.launcher) root.launcher.acknowledgeNotifications(item)
+  }
 
   function changePreference(key, value) {
     var next = Object.assign({}, root.preferences)
@@ -143,6 +154,7 @@ Item {
   function refreshPicker() {
     var items = root.dockData.pinned.concat(root.dockData.unpinned)
     var item = items.find(function(value) { return value.key === root.pickerKey })
+    root.pickerItem = item || null
     root.pickerTitle = item ? item.name : ""
     root.windowRows = DockModel.pickerRows(item, root.windowMetadata)
     if (root.windowRows.length === 0) root.closePicker()
@@ -1010,6 +1022,7 @@ Item {
         id: windowPicker
         title: root.pickerTitle
         rows: root.windowRows
+        showPreviews: root.preferences.showWindowPreviews
         maxHeight: Math.max(120, (root.dockScreen ? root.dockScreen.height : 720) - dockPanel.height - 32)
         onContainsPointerChanged: {
           if (containsPointer) pickerHideTimer.stop()
@@ -1017,6 +1030,7 @@ Item {
         }
         onWindowActivated: function(win) {
           root.dismissAppPopups()
+          root.acknowledgeNotifications(root.pickerItem)
           DockModel.activateWindow(win, Hyprland)
         }
         onWindowClosed: function(win) { DockModel.closeAppWindow({ windows: [win] }, Hyprland) }
@@ -1417,11 +1431,13 @@ Item {
             isReordering: root.draggingPinnedIndex >= 0
             dragVisualX: root.draggingPinnedIndex === index ? root.dragVisualX : 0
             dragVisualY: root.draggingPinnedIndex === index ? root.dragVisualY : 0
+            badgeCount: root.badgeCountFor(modelData)
             targetScale: (Array.isArray(root.pinnedScales) && index < root.pinnedScales.length) ? root.pinnedScales[index] : 1.0
             targetOffsetX: (Array.isArray(root.pinnedOffsets) && index < root.pinnedOffsets.length) ? root.pinnedOffsets[index] : 0
 
             onClicked: function(item) {
               root.dismissAppPopups()
+              root.acknowledgeNotifications(item)
               DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries, root.launcher, Hyprland)
             }
 
@@ -1489,11 +1505,13 @@ Item {
             isDockHovered: root.isDockHovered
             magnificationDuration: root.magnificationDuration
             reduceMotion: root.reduceMotion
+            badgeCount: root.badgeCountFor(modelData)
             targetScale: (Array.isArray(root.unpinnedScales) && index < root.unpinnedScales.length) ? root.unpinnedScales[index] : 1.0
             targetOffsetX: (Array.isArray(root.unpinnedOffsets) && index < root.unpinnedOffsets.length) ? root.unpinnedOffsets[index] : 0
 
             onClicked: function(item) {
               root.dismissAppPopups()
+              root.acknowledgeNotifications(item)
               DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries, root.launcher, Hyprland)
             }
 

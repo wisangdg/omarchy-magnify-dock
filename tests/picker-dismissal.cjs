@@ -21,8 +21,9 @@ for (const [, body] of clicks) {
     const cooldown = { running: false, restart() { this.running = true; } };
     const root = {
       pickerOpen: open, pendingPickerKey: 'whatsapp', pickerKey: open ? 'whatsapp' : '',
-      tooltipVisible: true, hideScheduled: false,
+      tooltipVisible: true, hideScheduled: false, acknowledged: null,
       clearTooltip() { this.tooltipVisible = false; },
+      acknowledgeNotifications(actual) { this.acknowledged = actual; },
       scheduleDockHide() { this.hideScheduled = true; },
       closePicker() { closePicker(this, showTimer, hideTimer); },
       dismissAppPopups() { dismiss(this, cooldown); },
@@ -36,6 +37,7 @@ for (const [, body] of clicks) {
     const model = {
       handleItemClick(actual) {
         assert.equal(actual, item);
+        assert.equal(root.acknowledged, item, 'click clears the app badge before activation');
         assert.equal(root.pickerOpen, false, 'dismiss before focus can warp the pointer');
         assert.equal(root.pendingPickerKey, '');
         assert.equal(root.pickerKey, '');

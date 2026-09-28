@@ -21,6 +21,7 @@ Item {
   property bool isHovered: false
   property bool reduceMotion: false
   property bool isLaunching: false
+  property int badgeCount: 0
   property real bounceY: 0
   property real pressScale: (mouseArea.pressed && !root.isBeingDragged) ? 0.94 : 1.0
 
@@ -288,6 +289,37 @@ Item {
           if (root.isRunning) root.closeRequested(root.itemData)
           else root.pinToggleRequested(root.itemData)
         }
+      }
+    }
+
+    // macOS-style unread notification badge, pinned to the icon's top-right so
+    // it magnifies and rides along with the icon during the wave.
+    Rectangle {
+      id: badge
+      visible: opacity > 0.01
+      opacity: root.badgeCount > 0 ? 1 : 0
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.rightMargin: -4
+      anchors.topMargin: -4
+      width: Math.max(15, badgeLabel.implicitWidth + 8)
+      height: 15
+      radius: height / 2
+      color: "#ff3b30"
+      border.color: Util.alpha("#000000", 0.28)
+      border.width: 1
+
+      Behavior on opacity {
+        NumberAnimation { duration: root.reduceMotion ? 0 : 140; easing.type: Easing.OutCubic }
+      }
+
+      Text {
+        id: badgeLabel
+        anchors.centerIn: parent
+        text: root.badgeCount > 99 ? "99+" : String(root.badgeCount)
+        color: "#ffffff"
+        font.pixelSize: 9
+        font.bold: true
       }
     }
   }

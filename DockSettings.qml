@@ -100,6 +100,34 @@ Rectangle {
           root.preferenceChanged("windowScope", ["all", "monitor", "workspace"][index])
         }
       }
+      RowLayout {
+        Layout.fillWidth: true
+        Text {
+          text: "Window previews on hover"
+          color: Color.foreground
+          Layout.fillWidth: true
+        }
+        Switch {
+          objectName: "showWindowPreviews"
+          checked: root.settings.showWindowPreviews !== false
+          Accessible.name: "Show window previews on hover"
+          onToggled: root.preferenceChanged("showWindowPreviews", checked)
+        }
+      }
+      RowLayout {
+        Layout.fillWidth: true
+        Text {
+          text: "Notification badges"
+          color: Color.foreground
+          Layout.fillWidth: true
+        }
+        Switch {
+          objectName: "showNotificationBadges"
+          checked: root.settings.showNotificationBadges !== false
+          Accessible.name: "Show notification badges on apps"
+          onToggled: root.preferenceChanged("showNotificationBadges", checked)
+        }
+      }
       Text {
         text: "Pinned apps remain available in every mode. Reveal and hide delays apply when Auto-hide is enabled."
         color: Color.foreground

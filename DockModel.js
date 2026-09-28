@@ -2,7 +2,8 @@
 
 var defaultSettings = {
   iconSize: 34, magnification: 1.6, spacing: 6, opacity: 0.76,
-  revealDelay: 0, hideDelay: 220, windowScope: "all"
+  revealDelay: 0, hideDelay: 220, windowScope: "all",
+  showWindowPreviews: true, showNotificationBadges: true
 };
 
 function normalizeSettings(input) {
@@ -20,7 +21,30 @@ function normalizeSettings(input) {
   }
   result.windowScope = ["all", "monitor", "workspace"].indexOf(input.windowScope) >= 0
     ? input.windowScope : "all";
+  // Booleans default to on: a missing key means an older config, not "off".
+  result.showWindowPreviews = input.showWindowPreviews !== false;
+  result.showNotificationBadges = input.showNotificationBadges !== false;
   return result;
+}
+
+// Notification counts are keyed by the app display name recorded by the
+// notification service. Match those keys against a dock item's name and id so
+// "Thunderbird" and "org.mozilla.Thunderbird" both land on one icon.
+function notificationKeysForItem(counts, item) {
+  var keys = [];
+  if (!counts || !item) return keys;
+  for (var app in counts) {
+    if (!Object.prototype.hasOwnProperty.call(counts, app) || !app) continue;
+    if (matchApp(app, item.name) || matchApp(app, item.id)) keys.push(app);
+  }
+  return keys;
+}
+
+function notificationCountFor(counts, item) {
+  var keys = notificationKeysForItem(counts, item);
+  var total = 0;
+  for (var i = 0; i < keys.length; i++) total += Number(counts[keys[i]]) || 0;
+  return total;
 }
 
 function windowMetadata(win, metadata) {
