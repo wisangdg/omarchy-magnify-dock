@@ -18,7 +18,20 @@ Item {
   property var manifest: null
   property var dockScreen: null
   property var launcher: null
+  // Omarchy only hands `appLibrary` to plugins declaring kind "menu", so this
+  // panel receives null. Icons would then depend solely on Qt's themed lookup,
+  // whose theme listing is built once at shell start: an app installed after
+  // that renders as the generic executable gear until the shell restarts.
+  // Scan the XDG icon directories ourselves so app icons stay correct.
   property var appLibrary: shell ? shell.appLibrary : null
+  property var iconIndex: ({})
+  property var pendingIconIndex: ({})
+  readonly property var iconLibrary: root.appLibrary ? root.appLibrary : localIconLibrary
+
+  QtObject {
+    id: localIconLibrary
+    property var iconIndex: root.iconIndex
+  }
 
   // Sleek macOS Dock Dimensions & Spacing
   property var preferences: DockModel.normalizeSettings(null)
@@ -607,7 +620,7 @@ Item {
     var data = DockModel.buildDockItems(
       visibleWindows,
       DesktopEntries,
-      root.appLibrary,
+      root.iconLibrary,
       Quickshell,
       root.customPinnedApps,
       root.windowMetadata
@@ -861,11 +874,49 @@ Item {
       function onMonitorChanged() { Qt.callLater(root.rebuildDock) }
       function onTitleChanged() { Qt.callLater(root.rebuildDock) }
       function onWaylandHandleChanged() { Qt.callLater(root.rebuildDock) }
+      // Hyprland IPC data (class, pid, stable_id) can arrive after the window
+      // first appears, so rebuild once it lands and windowMetadata picks it up.
+      function onLastIpcObjectChanged() { Qt.callLater(root.rebuildDock) }
     }
   }
   Connections {
     target: Hyprland.toplevels
-    function onValuesChanged() { Qt.callLater(root.rebuildDock) }
+    function onValuesChanged() {
+      ipcSyncTimer.attempts = 0
+      ipcSyncTimer.restart()
+      Qt.callLater(root.rebuildDock)
+    }
+  }
+  // Hyprland does not push pid/stable_id/class for a window that opens while the
+  // shell is already running, so its toplevel keeps an empty lastIpcObject and
+  // Force Close stays hidden until the shell restarts. Poll the client list until
+  // every toplevel has its full object. refreshToplevels() is stock Quickshell
+  // API, so this does not depend on a patched shell build. Polling rather than a
+  // single call because a request already in flight makes refreshToplevels() a
+  // no-op, which is what leaves the newest window behind.
+  Timer {
+    id: ipcSyncTimer
+    interval: 300
+    repeat: true
+    property int attempts: 0
+    onTriggered: {
+      var toplevels = DockModel.toArray(Hyprland.toplevels.values)
+      var missing = false
+      for (var i = 0; i < toplevels.length; i++) {
+        var ipc = toplevels[i] ? toplevels[i].lastIpcObject : null
+        if (!ipc || !ipc.stableId) {
+          missing = true
+          break
+        }
+      }
+      if (!missing || attempts >= 10) {
+        stop()
+        attempts = 0
+        return
+      }
+      attempts++
+      Hyprland.refreshToplevels()
+    }
   }
 
   // Reactive listeners for window and app changes
@@ -884,7 +935,10 @@ Item {
 
   Connections {
     target: DesktopEntries.applications
-    function onValuesChanged() { root.rebuildDock() }
+    function onValuesChanged() {
+      root.rebuildDock()
+      iconIndexDebounce.restart()
+    }
   }
 
   Connections {
@@ -892,9 +946,54 @@ Item {
     function onAppsChanged() { root.rebuildDock() }
   }
 
+  // Maps an icon name to a file on disk (e.g. "microsoft-edge" ->
+  // ".../hicolor/128x128/apps/microsoft-edge.png"). Registered before Qt's
+  // themed lookup in DockModel.resolveIcon, so an icon that Qt's startup-time
+  // theme listing never saw still resolves. SVGs are listed before PNGs so the
+  // first hit per name is the scalable one.
+  function indexIconLine(line) {
+    var value = String(line || "").trim()
+    if (value.length === 0) return
+    var slash = value.lastIndexOf("/")
+    var file = slash >= 0 ? value.slice(slash + 1) : value
+    var dot = file.lastIndexOf(".")
+    var name = dot > 0 ? file.slice(0, dot) : file
+    if (name.length > 0 && root.pendingIconIndex[name] === undefined)
+      root.pendingIconIndex[name] = value
+  }
+
+  Process {
+    id: iconIndexScan
+    command: ["bash", "-c",
+      "dirs=\"$HOME/.icons $HOME/.local/share/icons\";" +
+      "IFS=\":\"; for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do dirs=\"$dirs $d/icons\"; done; unset IFS;" +
+      "for ext in svg png; do" +
+      "  for base in $dirs; do" +
+      "    [[ -d $base ]] && find \"$base\" \\( -path \"*/apps/*\" -o -path \"*/devices/*\" \\) -name \"*.$ext\" 2>/dev/null;" +
+      "  done;" +
+      "  find /usr/share/pixmaps -maxdepth 1 -name \"*.$ext\" 2>/dev/null;" +
+      "done"
+    ]
+    stdout: SplitParser { onRead: function(line) { root.indexIconLine(line) } }
+    onStarted: root.pendingIconIndex = ({})
+    // Publish the finished index, then rebuild so items that fell back to the
+    // generic gear during the scan pick up their real icon.
+    onExited: {
+      root.iconIndex = root.pendingIconIndex
+      root.rebuildDock()
+    }
+  }
+
+  Timer {
+    id: iconIndexDebounce
+    interval: 750
+    onTriggered: if (!iconIndexScan.running) iconIndexScan.running = true
+  }
+
   Component.onCompleted: {
     console.log("macOS dock instance ready", root.dockScreen ? root.dockScreen.name : "no-screen")
     if (root.appLibrary) root.appLibrary.refreshIcons()
+    iconIndexScan.running = true
     root.rebuildDock()
   }
 
@@ -1217,7 +1316,13 @@ Item {
         onPinToggled: function(item) {
           if (item && item.id) root.togglePinApp(item.id)
         }
-        canForceClose: DockModel.forceCloseTarget(root.contextTarget, Hyprland) !== null
+        // Re-evaluate whenever Hyprland.toplevels updates so newly opened windows
+        // (e.g. Proton games) immediately get their Force Close option instead of
+        // requiring a shell restart.
+        canForceClose: {
+          var _tl = Hyprland.toplevels.values
+          return root.contextTarget !== null && _tl && DockModel.forceCloseTarget(root.contextTarget, Hyprland) !== null
+        }
         onForceCloseClicked: function(item) { root.requestForceClose(item) }
         onQuitClicked: function(item) {
           DockModel.closeAppWindow(item, Hyprland)
