@@ -140,6 +140,12 @@ An app with no windows in that scope behaves as a launcher. Windows whose
 Hyprland metadata is not available yet appear in `all` mode; filtered modes
 include them once their monitor and workspace are known.
 
+Browser web apps opened with `--app=` run under a `<browser>-<host>__-<profile>`
+window id that names the site rather than the launcher. The dock matches those
+windows to their pinned entry through the site host in its `Exec` URL, so a
+pinned web app keeps one icon and clicking it focuses the open window instead of
+launching a duplicate.
+
 Hovering a running app opens a scrollable window picker after 380 ms. It remains
 open while the pointer moves into the picker, and suspends auto-hide until it
 closes. Each row shows the window title, workspace label, and a static thumbnail

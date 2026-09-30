@@ -464,6 +464,55 @@ const orcaDockItems = model.buildDockItems(
 assert.equal(orcaDockItems.unpinned.length, 1);
 assert.equal(orcaDockItems.unpinned[0].icon, "file:///usr/share/icons/hicolor/128x128/apps/orca-ide.png", "running Orca window must resolve orca-ide icon without showing gear fallback");
 
+// Browser web app windows. A Chromium --app window runs under
+// "<browser>-<host>__-<profile>", an id that shares nothing with the launcher
+// name, so it must resolve through the site host in the desktop entry's Exec.
+const webappEntry = {
+  id: "f15library.desktop",
+  name: "f15library",
+  icon: "f15library",
+  execString: 'omarchy-launch-webapp "https://www.f15library.com"',
+  command: ["omarchy-launch-webapp", "https://www.f15library.com"]
+};
+const browserEntry = {
+  id: "vivaldi-stable.desktop",
+  name: "Vivaldi",
+  icon: "vivaldi",
+  execString: "/usr/bin/vivaldi-stable --password-store=gnome-libsecret %U",
+  command: ["vivaldi-stable"]
+};
+const webappDesktopEntries = {
+  byId(id) { return [webappEntry, browserEntry].find((entry) => entry.id === id) || null; },
+  applications: { values: [webappEntry, browserEntry] }
+};
+const webappWindow = {
+  appId: "vivaldi-www.f15library.com__-Default",
+  initialClass: "vivaldi-www.f15library.com__-Default",
+  class: "vivaldi-www.f15library.com__-Default",
+  title: "F15 Library",
+  activated: true
+};
+const plainBrowserWindow = { appId: "vivaldi-stable", class: "vivaldi-stable", title: "Vivaldi" };
+
+assert.equal(model.webappHostFromAppId("vivaldi-www.f15library.com__-Default"), "www.f15library.com");
+assert.equal(model.webappHostFromAppId("vivaldi-stable"), "", "a plain browser app id carries no host");
+assert.equal(model.entryWebappHost(webappEntry), "www.f15library.com");
+assert.equal(model.entryWebappHost(browserEntry), "", "a browser entry launches no site");
+assert.equal(model.sameSiteHost("www.f15library.com", "f15library.com"), true);
+assert.equal(model.sameSiteHost("www.f15library.com", "notf15library.com"), false, "host suffix must fall on a dot boundary");
+assert.ok(model.entryMatchesWindow(webappEntry, "f15library", webappWindow, null), "web app window must match its entry via the Exec host");
+assert.equal(model.entryMatchesWindow(browserEntry, "vivaldi-stable", webappWindow, null), false, "the browser entry must not absorb a web app window");
+assert.equal(model.entryMatchesWindow(webappEntry, "f15library", plainBrowserWindow, null), false, "the web app entry must not absorb a plain browser window");
+
+const webappDock = model.buildDockItems([webappWindow, plainBrowserWindow], webappDesktopEntries, null, null, ["vivaldi-stable", "f15library"]);
+assert.equal(webappDock.pinned[0].windowCount, 1, "Vivaldi pin keeps the plain browser window");
+assert.equal(webappDock.pinned[1].windowCount, 1, "f15library pin must own its web app window");
+assert.equal(webappDock.unpinned.length, 0, "a pinned web app must not add a second running icon");
+
+const unpinnedWebapp = model.buildDockItems([webappWindow], webappDesktopEntries, null, null, []);
+assert.equal(unpinnedWebapp.unpinned.length, 1);
+assert.equal(unpinnedWebapp.unpinned[0].id, "f15library.desktop", "an unpinned web app still resolves its desktop entry");
+
 // Fuzzy icon resolution without desktop entry
 const fuzzyIcon = model.resolveIcon("orca", mockAppLib, null, ["orca"]);
 assert.equal(fuzzyIcon, "file:///usr/share/icons/hicolor/128x128/apps/orca-ide.png", "fuzzy icon lookup must map orca to orca-ide in iconIndex");

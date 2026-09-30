@@ -185,6 +185,42 @@ function matchApp(appIdA, appIdB) {
   return false;
 }
 
+// Chromium-based browsers run every "--app=" window under one synthetic app id
+// built from the site host: "<browser>-<host>__-<profile>", e.g.
+// "vivaldi-www.example.com__-Default". The pin is named after the web app, so the
+// host is the only part that can link the window back to its desktop entry.
+var webappAppIdPattern = /^(?:google[-_]?chrome|chrome|chromium|brave|vivaldi|microsoft[-_]?edge|opera|helium)[-_](\S+?)__-/i;
+
+function webappHostFromAppId(appId) {
+  if (!appId) return "";
+  var match = webappAppIdPattern.exec(String(appId));
+  if (!match) return "";
+  return String(match[1]).toLowerCase().replace(/:\d+$/, "");
+}
+
+// Web apps are launched as "omarchy-launch-webapp <url>" or "<browser> --app=<url>",
+// so the site URL in the Exec line identifies which desktop entry owns a window.
+function entryWebappHost(entry) {
+  if (!entry) return "";
+  var probe = String(entry.execString || "");
+  if (!probe) {
+    var command = toArray(entry.command);
+    probe = command.join(" ");
+  }
+  var match = /https?:\/\/([^\/\s"'>?#]+)/i.exec(probe);
+  if (!match) return "";
+  return String(match[1]).toLowerCase().replace(/:\d+$/, "");
+}
+
+// "www.example.com" and "example.com" are the same site; "notexample.com" is not.
+function sameSiteHost(hostA, hostB) {
+  if (!hostA || !hostB) return false;
+  if (hostA === hostB) return true;
+  var longer = hostA.length > hostB.length ? hostA : hostB;
+  var shorter = hostA.length > hostB.length ? hostB : hostA;
+  return longer.slice(longer.length - shorter.length - 1) === "." + shorter;
+}
+
 function entryAliases(entry, fallbackId) {
   var aliases = [fallbackId];
   if (!entry) return aliases;
@@ -232,6 +268,14 @@ function entryMatchesWindow(entry, fallbackId, win, metadata) {
       if (matchApp(appAliases[a], winAliases[w])) return true;
     }
   }
+
+  // Web app windows name the site, not the launcher, so fall back to comparing
+  // the entry's Exec URL host against the host inside the window's app id.
+  var entryHost = entryWebappHost(entry);
+  if (!entryHost) return false;
+  for (var h = 0; h < winAliases.length; h++) {
+    if (sameSiteHost(entryHost, webappHostFromAppId(winAliases[h]))) return true;
+  }
   return false;
 }
 
@@ -251,12 +295,20 @@ function findDesktopEntry(desktopEntries, appId, win, metadata) {
     if (cleaned.length > 0 && candidates.indexOf(cleaned) === -1) candidates.push(cleaned);
   }
 
+  var winList = win ? windowAliases(win, metadata) : [];
+  var webappHosts = [];
+  function addWebappHost(val) {
+    var host = webappHostFromAppId(val);
+    if (host && webappHosts.indexOf(host) === -1) webappHosts.push(host);
+  }
+
   addCandidate(appId);
+  addWebappHost(appId);
+  for (var w = 0; w < winList.length; w++) {
+    addCandidate(winList[w]);
+    addWebappHost(winList[w]);
+  }
   if (win) {
-    var winList = windowAliases(win, metadata);
-    for (var w = 0; w < winList.length; w++) {
-      addCandidate(winList[w]);
-    }
     if (win.title) {
       var parts = String(win.title).split(/\s+[-–—|:]\s+/);
       for (var p = 0; p < parts.length; p++) {
@@ -300,7 +352,21 @@ function findDesktopEntry(desktopEntries, appId, win, metadata) {
       }
     }
 
-    // Pass B: Match item.id
+    // Pass B: Match web app entries by the site host in their Exec URL. A browser
+    // --app window is the only place that host appears, so it is the sole link
+    // between a running web app and the desktop entry that launched it.
+    if (webappHosts.length > 0) {
+      for (var wb = 0; wb < apps.length; wb++) {
+        var webItem = apps[wb];
+        var webItemHost = entryWebappHost(webItem);
+        if (!webItemHost) continue;
+        for (var wh = 0; wh < webappHosts.length; wh++) {
+          if (sameSiteHost(webItemHost, webappHosts[wh])) return webItem;
+        }
+      }
+    }
+
+    // Pass C: Match item.id
     for (var j = 0; j < apps.length; j++) {
       var idItem = apps[j];
       if (!idItem || !idItem.id) continue;
@@ -309,7 +375,7 @@ function findDesktopEntry(desktopEntries, appId, win, metadata) {
       }
     }
 
-    // Pass C: Match executable commands and aliases
+    // Pass D: Match executable commands and aliases
     for (var e = 0; e < apps.length; e++) {
       var exeItem = apps[e];
       if (!exeItem) continue;
@@ -323,7 +389,7 @@ function findDesktopEntry(desktopEntries, appId, win, metadata) {
       }
     }
 
-    // Pass D: Match application display name
+    // Pass E: Match application display name
     for (var p = 0; p < apps.length; p++) {
       var nameItem = apps[p];
       if (!nameItem || !nameItem.name) continue;
