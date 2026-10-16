@@ -44,6 +44,7 @@ Item {
   property real capsuleHeight: root.baseIconSize + root.dockPadding * 2
   property real layoutExpansionRatio: 0.82
   property int magnificationDuration: 55
+  property int autoHideSlideDuration: 250
 
   readonly property bool environmentReduceMotion: {
     var value = String(Quickshell.env("OMARCHY_REDUCE_MOTION") || "").toLowerCase()
@@ -72,11 +73,31 @@ Item {
   readonly property var hyprMonitor: root.dockScreen ? Hyprland.monitorFor(root.dockScreen) : null
   readonly property var activeWorkspace: root.hyprMonitor ? root.hyprMonitor.activeWorkspace : null
   property var forceCloseTarget: null
-  readonly property bool popupOpen: root.contextMenuOpen || root.pickerOpen || root.settingsOpen || root.forceCloseTarget !== null
+  property bool emptyTrashConfirmOpen: false
+  readonly property bool popupOpen: root.contextMenuOpen || root.pickerOpen || root.settingsOpen || root.forceCloseTarget !== null || root.emptyTrashConfirmOpen
 
   function requestForceClose(item) {
     root.forceCloseTarget = DockModel.forceCloseTarget(item, Hyprland)
     if (root.forceCloseTarget) root.revealDock()
+  }
+
+  // macOS asks before permanently erasing the Trash, so the dock does too.
+  // Only offered while the trash holds something.
+  function requestEmptyTrash() {
+    if (!root.trashFull) return
+    root.emptyTrashConfirmOpen = true
+    root.revealDock()
+  }
+
+  function finishEmptyTrash(confirmed) {
+    root.emptyTrashConfirmOpen = false
+    if (confirmed) {
+      Quickshell.execDetached(["gio", "trash", "--empty"])
+      // Re-probe now so the icon can drop to the empty basket without waiting
+      // for the next tick; the timer covers the losing race.
+      trashProbe.running = true
+    }
+    root.scheduleDockHide()
   }
 
   function finishForceClose(confirmed) {
@@ -140,8 +161,13 @@ Item {
     }
     root.clearTooltip()
     pickerHideTimer.stop()
+    var targetOffset = Number(target.animatedOffsetX || 0)
+    var scale = Number(target.animatedScale || 1.0)
+    var iconSize = Number(target.iconSize || root.iconPixelSize)
+    var bounceY = Number(target.bounceY || 0)
+    var magnifyOffsetY = DockModel.popupVerticalOffset(scale, iconSize, bounceY)
     var point = dockPanel.contentItem.mapFromItem(target,
-      target.width / 2 + Number(target.animatedOffsetX || 0), -8)
+      target.width / 2 + targetOffset, -8 - magnifyOffsetY)
     root.pickerAnchorX = point.x
     root.pickerAnchorY = point.y
     root.pendingPickerKey = item.key
@@ -204,6 +230,11 @@ Item {
   property var unpinnedScales: []
   property var pinnedOffsets: []
   property var unpinnedOffsets: []
+  // macOS never magnifies the Trash: it holds its size while the app icons
+  // around it surge, so trashScale stays pinned at 1.0. Its slot still rides
+  // the layout through trashOffsetX.
+  property real trashScale: 1.0
+  property real trashOffsetX: 0
   property real extraCapsuleWidth: 0
   property real animatedExtraCapsuleWidth: root.extraCapsuleWidth
 
@@ -238,6 +269,29 @@ Item {
   // null means no saved preference; [] means explicitly no pinned apps.
   property var customPinnedApps: null
   property var dockData: ({ pinned: [], unpinned: [], totalItems: 0 })
+
+  // macOS Trash: always the rightmost item, in the running-app group, with no
+  // running dot, no badge and no drag handle. `isPinned: false` keeps it out of
+  // the reorder logic, and the icon pair switches on the trash's real state.
+  property bool trashFull: false
+  property bool trashProbeSawEntry: false
+  // macOS-style Trash artwork bundled with the plugin (authored, not Apple art)
+  // so the icon matches the real Dock regardless of the desktop icon theme. If
+  // an asset is ever missing, DockItem falls back to the freedesktop theme names.
+  readonly property string trashEmptyIcon: String(Qt.resolvedUrl("assets/trash-empty.svg"))
+  readonly property string trashFullIcon: String(Qt.resolvedUrl("assets/trash-full.svg"))
+  property var trashItem: ({
+    key: "trash",
+    id: "trash",
+    name: "Trash",
+    icon: root.trashFull ? root.trashFullIcon : root.trashEmptyIcon,
+    desktopEntry: null,
+    isPinned: false,
+    isRunning: false,
+    isFocused: false,
+    windowCount: 0,
+    windows: []
+  })
 
   // Drag & drop reorder state
   property int draggingPinnedIndex: -1
@@ -517,6 +571,31 @@ Item {
     command: ["python3", root.dockAudioScript, "sync"]
   }
 
+  // Trash state for the empty/full icon. gio reads the trash through the same
+  // GLib/GVfs backend the file manager and the Empty Trash action use, so the
+  // icon matches the trash the user actually sees.
+  // ponytail: 1s poll of a ~10ms command; swap for an inotify watch on the
+  // trash directories if the spawn ever shows up in power profiling.
+  Timer {
+    id: trashProbeTimer
+    interval: 1000
+    repeat: true
+    running: true
+    onTriggered: trashProbe.running = true
+  }
+
+  Process {
+    id: trashProbe
+    command: ["gio", "trash", "--list"]
+    onStarted: root.trashProbeSawEntry = false
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (String(line).trim().length > 0) root.trashProbeSawEntry = true
+      }
+    }
+    onExited: root.trashFull = root.trashProbeSawEntry
+  }
+
   // Settings File Persistence
   readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy/dock-pinned-macos.json"
 
@@ -545,6 +624,9 @@ Item {
         }
         if (typeof parsed.reserveSpace === "boolean") {
           root.reserveSpace = parsed.reserveSpace
+        }
+        if (root.autoHide && root.reserveSpace) {
+          root.reserveSpace = false
         }
       }
     } catch (e) {}
@@ -635,7 +717,8 @@ Item {
       root.itemSpacing,
       root.dockPadding,
       pCount,
-      uCount
+      uCount,
+      1 // the Trash always holds the last slot
     )
 
     updateMagnification()
@@ -671,6 +754,8 @@ Item {
     root.unpinnedScales = []
     root.pinnedOffsets = []
     root.unpinnedOffsets = []
+    root.trashScale = 1.0
+    root.trashOffsetX = 0
     root.extraCapsuleWidth = 0
 
     root.updateDragState(pt.x - root.dragGrabOffsetX)
@@ -812,6 +897,8 @@ Item {
       root.unpinnedScales = []
       root.pinnedOffsets = []
       root.unpinnedOffsets = []
+      root.trashScale = 1.0
+      root.trashOffsetX = 0
       root.extraCapsuleWidth = 0
       return
     }
@@ -852,7 +939,12 @@ Item {
     }
     root.unpinnedScales = uScales
 
-    var allScales = [root.launcherScale].concat(pScales).concat(uScales)
+    // The Trash holds its size during the wave (macOS does not magnify it). Its
+    // slot still feeds the offset solver at 1.0 so the layout and the capsule
+    // width account for it while the app icons around it surge.
+    root.trashScale = 1.0
+
+    var allScales = [root.launcherScale].concat(pScales).concat(uScales).concat([root.trashScale])
     var offsets = DockModel.computeMagnifiedOffsets(
       allScales,
       root.baseIconSize,
@@ -860,7 +952,9 @@ Item {
     )
     root.launcherOffsetX = offsets.length > 0 ? offsets[0] : 0
     root.pinnedOffsets = offsets.slice(1, 1 + pScales.length)
-    root.unpinnedOffsets = offsets.slice(1 + pScales.length)
+    root.unpinnedOffsets = offsets.slice(1 + pScales.length, 1 + pScales.length + uScales.length)
+    root.trashOffsetX = offsets.length > 1 + pScales.length + uScales.length
+      ? offsets[1 + pScales.length + uScales.length] : 0
     root.extraCapsuleWidth = (typeof offsets.totalExtra === "number") ? offsets.totalExtra : 0
   }
 
@@ -1024,10 +1118,12 @@ Item {
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     
     // Reserve bottom space so Hyprland windows stop cleanly above the dock
-    exclusionMode: root.reserveSpace && !root.autoHide
+    exclusionMode: (root.reserveSpace && !root.autoHide)
       ? ExclusionMode.Normal
       : ExclusionMode.Ignore
-    exclusiveZone: root.capsuleHeight + 10
+    exclusiveZone: (root.reserveSpace && !root.autoHide)
+      ? (root.capsuleHeight + 10)
+      : 0
 
     // Single dynamic hit area bound directly to mask so Quickshell updates
     // the Wayland input region on geometry changes without nested region issues.
@@ -1071,12 +1167,36 @@ Item {
           if (!target) return
           try {
             var targetOffset = Number(target.animatedOffsetX || 0)
+            var scale = Number(target.animatedScale || 1.0)
+            var iconSize = Number(target.iconSize || root.iconPixelSize)
+            var bounceY = Number(target.bounceY || 0)
+            var magnifyOffsetY = DockModel.popupVerticalOffset(scale, iconSize, bounceY)
             var localX = target.width / 2 - tooltipWindow.implicitWidth / 2 + targetOffset
-            var localY = -tooltipWindow.implicitHeight - 10
+            var localY = -tooltipWindow.implicitHeight - 10 - magnifyOffsetY
             var point = dockPanel.contentItem.mapFromItem(target, localX, localY)
             tooltipWindow.anchor.rect.x = Math.round(point.x)
             tooltipWindow.anchor.rect.y = Math.round(point.y)
           } catch (e) {}
+        }
+      }
+
+      Connections {
+        target: root.tooltipTarget
+        ignoreUnknownSignals: true
+        function onAnimatedScaleChanged() {
+          if (root.tooltipVisible && tooltipWindow.anchor && typeof tooltipWindow.anchor.updateAnchor === "function") {
+            tooltipWindow.anchor.updateAnchor()
+          }
+        }
+        function onAnimatedOffsetXChanged() {
+          if (root.tooltipVisible && tooltipWindow.anchor && typeof tooltipWindow.anchor.updateAnchor === "function") {
+            tooltipWindow.anchor.updateAnchor()
+          }
+        }
+        function onBounceYChanged() {
+          if (root.tooltipVisible && tooltipWindow.anchor && typeof tooltipWindow.anchor.updateAnchor === "function") {
+            tooltipWindow.anchor.updateAnchor()
+          }
         }
       }
 
@@ -1100,6 +1220,7 @@ Item {
         }
       }
     }
+
 
     PopupWindow {
       id: pickerWindow
@@ -1249,6 +1370,115 @@ Item {
     }
 
     PopupWindow {
+      id: emptyTrashWindow
+      visible: root.emptyTrashConfirmOpen
+      color: "transparent"
+      implicitWidth: emptyTrashCard.width
+      implicitHeight: emptyTrashCard.height
+      anchor {
+        window: dockPanel
+        adjustment: PopupAdjustment.Slide
+        edges: Edges.Top | Edges.Left
+        gravity: Edges.Bottom | Edges.Right
+        rect.x: Math.round((dockPanel.width - emptyTrashWindow.implicitWidth) / 2)
+        rect.y: Math.round(dockPanel.height - root.capsuleHeight - emptyTrashWindow.implicitHeight - 16)
+        rect.width: 1
+        rect.height: 1
+      }
+
+      Rectangle {
+        id: emptyTrashCard
+        width: 360
+        height: emptyTrashCol.implicitHeight + 28
+        radius: 12
+        color: Util.alpha(Color.background, 0.98)
+        border.color: Util.alpha(Color.urgent, 0.6)
+        border.width: 1
+
+        Column {
+          id: emptyTrashCol
+          anchors.fill: parent
+          anchors.margins: 14
+          spacing: 12
+
+          Text {
+            width: parent.width
+            text: "Empty Trash?"
+            color: Color.urgent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            font.bold: true
+          }
+
+          Text {
+            width: parent.width
+            text: "Are you sure you want to permanently erase the items in the Trash? This cannot be undone."
+            color: Color.foreground
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+          }
+
+          Row {
+            anchors.right: parent.right
+            spacing: 8
+
+            Rectangle {
+              width: 80
+              height: 28
+              radius: 6
+              color: trashCancelMouse.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
+              border.color: Util.alpha(Color.foreground, 0.25)
+              border.width: 1
+
+              Text {
+                anchors.centerIn: parent
+                text: "Cancel"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              MouseArea {
+                id: trashCancelMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.finishEmptyTrash(false)
+              }
+            }
+
+            Rectangle {
+              width: 100
+              height: 28
+              radius: 6
+              color: trashConfirmMouse.containsMouse ? Util.alpha(Color.urgent, 0.3) : Util.alpha(Color.urgent, 0.18)
+              border.color: Color.urgent
+              border.width: 1
+
+              Text {
+                anchors.centerIn: parent
+                text: "Empty Trash"
+                color: Color.urgent
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              MouseArea {
+                id: trashConfirmMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.finishEmptyTrash(true)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    PopupWindow {
       id: settingsWindow
       visible: root.settingsOpen
       color: "transparent"
@@ -1293,13 +1523,18 @@ Item {
           if (!target) return
           try {
             var targetOffset = Number(target.animatedOffsetX || 0)
+            var scale = Number(target.animatedScale || 1.0)
+            var iconSize = Number(target.iconSize || root.iconPixelSize)
+            var bounceY = Number(target.bounceY || 0)
+            var magnifyOffsetY = DockModel.popupVerticalOffset(scale, iconSize, bounceY)
             var localX = target.width / 2 - contextWindow.implicitWidth / 2 + targetOffset
-            var localY = -contextWindow.implicitHeight - 10
+            var localY = -contextWindow.implicitHeight - 10 - magnifyOffsetY
             var point = dockPanel.contentItem.mapFromItem(target, localX, localY)
             contextWindow.anchor.rect.x = Math.round(point.x)
             contextWindow.anchor.rect.y = Math.round(point.y)
           } catch (e) {}
         }
+
       }
 
       DockContextMenu {
@@ -1309,6 +1544,8 @@ Item {
         isAutoHide: root.autoHide
         isReserveSpace: root.reserveSpace
         isAudioMuted: root.isAppAudioMuted(root.contextTarget)
+        isTrash: root.contextTarget !== null && root.contextTarget.key === "trash"
+        isTrashEmpty: !root.trashFull
 
         onLaunchClicked: function(item) {
           DockModel.handleItemClick(item, Util, root.appLibrary, DesktopEntries, root.launcher, Hyprland)
@@ -1330,12 +1567,19 @@ Item {
         onMuteAudioToggled: function(item) {
           root.toggleAppAudio(item)
         }
+        onEmptyTrashRequested: root.requestEmptyTrash()
         onAutoHideToggled: {
           root.autoHide = !root.autoHide
+          if (root.autoHide && root.reserveSpace) {
+            root.reserveSpace = false
+          }
           root.saveConfig()
         }
         onReserveSpaceToggled: {
           root.reserveSpace = !root.reserveSpace
+          if (root.reserveSpace && root.autoHide) {
+            root.autoHide = false
+          }
           root.saveConfig()
         }
         onSettingsRequested: root.openSettings()
@@ -1430,7 +1674,7 @@ Item {
         y: root.autoHide && !root.dockPresented ? root.capsuleHeight + 8 : 0
         Behavior on y {
           NumberAnimation {
-            duration: root.reduceMotion ? 0 : 80
+            duration: root.reduceMotion ? 0 : root.autoHideSlideDuration
             easing.type: Easing.OutCubic
           }
         }
@@ -1452,6 +1696,19 @@ Item {
         color: Util.alpha("#ffffff", 0.16)
       }
 
+      // Right-click on empty dock capsule space opens Dock Settings (macOS behavior)
+      MouseArea {
+        anchors.fill: parent
+        z: -1
+        acceptedButtons: Qt.RightButton
+        cursorShape: Qt.ArrowCursor
+        onClicked: function(mouse) {
+          if (mouse.button === Qt.RightButton) {
+            root.openContextMenu(null, dockCapsule)
+          }
+        }
+      }
+
       // Main Items Content Row
       Row {
         id: contentRow
@@ -1464,6 +1721,10 @@ Item {
           width: root.baseIconSize
           height: root.baseIconSize
           z: root.animatedLauncherScale
+          property real animatedScale: root.animatedLauncherScale
+          property real animatedOffsetX: root.animatedLauncherOffsetX
+          property real iconSize: root.iconPixelSize
+          property real bounceY: 0
 
           Item {
             anchors.horizontalCenter: parent.horizontalCenter
@@ -1509,10 +1770,24 @@ Item {
         }
 
         Rectangle {
+          id: launcherSeparator
           anchors.verticalCenter: parent.verticalCenter
           width: 1
           height: root.iconPixelSize * 0.65
           color: Util.alpha(Color.foreground, 0.16)
+
+          MouseArea {
+            anchors.centerIn: parent
+            width: root.itemSpacing + 8
+            height: root.baseIconSize
+            acceptedButtons: Qt.RightButton
+            cursorShape: Qt.ArrowCursor
+            onClicked: function(mouse) {
+              if (mouse.button === Qt.RightButton) {
+                root.openContextMenu(null, launcherSeparator)
+              }
+            }
+          }
         }
 
         // Pinned Apps
@@ -1585,12 +1860,26 @@ Item {
 
         // Separator between pinned and unpinned running apps
         Rectangle {
+          id: dockSeparator
           visible: (root.dockData.pinned && root.dockData.pinned.length > 0)
             && (root.dockData.unpinned && root.dockData.unpinned.length > 0)
           anchors.verticalCenter: parent.verticalCenter
           width: 1
           height: root.iconPixelSize * 0.65
           color: Util.alpha(Color.foreground, 0.16)
+
+          MouseArea {
+            anchors.centerIn: parent
+            width: root.itemSpacing + 8
+            height: root.baseIconSize
+            acceptedButtons: Qt.RightButton
+            cursorShape: Qt.ArrowCursor
+            onClicked: function(mouse) {
+              if (mouse.button === Qt.RightButton) {
+                root.openContextMenu(null, dockSeparator)
+              }
+            }
+          }
         }
 
         // Unpinned Running Apps
@@ -1641,6 +1930,62 @@ Item {
             onUnhovered: function(srcItem) {
               root.releaseAppTooltip(srcItem)
             }
+          }
+        }
+
+        // macOS separates the Trash from the app icons with the same divider it
+        // draws between favorites and running apps. Hidden when nothing but the
+        // launcher precedes the trash, whose own divider already splits them.
+        Rectangle {
+          id: trashSeparator
+          visible: (root.dockData.pinned && root.dockData.pinned.length > 0)
+            || (root.dockData.unpinned && root.dockData.unpinned.length > 0)
+          anchors.verticalCenter: parent.verticalCenter
+          width: 1
+          height: root.iconPixelSize * 0.65
+          color: Util.alpha(Color.foreground, 0.16)
+
+          MouseArea {
+            anchors.centerIn: parent
+            width: root.itemSpacing + 8
+            height: root.baseIconSize
+            acceptedButtons: Qt.RightButton
+            cursorShape: Qt.ArrowCursor
+            onClicked: function(mouse) {
+              if (mouse.button === Qt.RightButton) {
+                root.openContextMenu(null, trashSeparator)
+              }
+            }
+          }
+        }
+
+        // Trash: the last item of the running-app group, exactly like macOS.
+        // No running dot (isRunning is false), no badge (badgeCount stays 0),
+        // and no drag handle (isPinned is false, so DockItem never starts one).
+        DockItem {
+          itemData: root.trashItem
+          baseSize: root.baseIconSize
+          iconSize: root.iconPixelSize
+          isDockHovered: root.isDockHovered
+          magnificationDuration: root.magnificationDuration
+          reduceMotion: root.reduceMotion
+          targetScale: root.trashScale
+          targetOffsetX: root.trashOffsetX
+          // Themed trash icon used only if the bundled artwork cannot load.
+          fallbackIcon: DockModel.trashIconName(root.trashFull)
+
+          // gio resolves the desktop's default trash handler, so the dock opens
+          // whatever file manager the user actually runs, not a hardcoded one.
+          onClicked: Quickshell.execDetached(["gio", "open", "trash:///"])
+          onContextMenuRequested: function(item, srcItem) {
+            root.openContextMenu(item, srcItem)
+          }
+          onHovered: function(item, srcItem) {
+            if (root.draggingPinnedIndex >= 0) return
+            root.requestAppTooltip(item, srcItem)
+          }
+          onUnhovered: function(srcItem) {
+            root.releaseAppTooltip(srcItem)
           }
         }
       }

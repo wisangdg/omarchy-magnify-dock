@@ -24,6 +24,15 @@ TestCase {
     }
   }
   Component { id: pickerComponent; Dock.DockWindowPicker {} }
+  Component {
+    id: contextMenuComponent
+    Dock.DockContextMenu {
+      isOpen: true
+      targetItem: ({ key: "trash", name: "Trash", isPinned: false, isRunning: false })
+      isTrash: true
+      isTrashEmpty: false
+    }
+  }
   SignalSpy { id: actionSpy }
 
   function cleanup() { actionSpy.target = null; actionSpy.clear() }
@@ -70,5 +79,42 @@ TestCase {
     mouseClick(findChild(panel, "closeWindow"))
     compare(actionSpy.count, 1)
     compare(actionSpy.signalArguments[0][0], winB)
+  }
+
+  function test_trashMenuOnlyOffersEmptyTrash() {
+    var menu = createTemporaryObject(contextMenuComponent, testCase)
+    verify(menu)
+    waitForRendering(menu)
+    // A trash target must hide Bring to Front, Keep in Dock, Mute, Close and
+    // Force Close, or the menu would offer app actions for a folder of files.
+    verify(!menu.showAppRows)
+    actionSpy.target = menu
+    actionSpy.signalName = "emptyTrashRequested"
+    mouseClick(findChild(menu, "emptyTrash"))
+    compare(actionSpy.count, 1)
+  }
+
+  function test_appMenuKeepsAppRows() {
+    var menu = createTemporaryObject(contextMenuComponent, testCase, {
+      isTrash: false, targetItem: ({ key: "pin_x", name: "Editor", isPinned: true, isRunning: false })
+    })
+    verify(menu)
+    waitForRendering(menu)
+    verify(menu.showAppRows)
+    verify(!menu.showDockRows)
+  }
+
+  function test_dockSettingsMenuOnDivider() {
+    var menu = createTemporaryObject(contextMenuComponent, testCase, {
+      isTrash: false, targetItem: null
+    })
+    verify(menu)
+    waitForRendering(menu)
+    verify(!menu.showAppRows)
+    verify(menu.showDockRows)
+    actionSpy.target = menu
+    actionSpy.signalName = "settingsRequested"
+    mouseClick(findChild(menu, "dockSettings"))
+    compare(actionSpy.count, 1)
   }
 }

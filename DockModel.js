@@ -756,8 +756,15 @@ function computeMagnifiedOffsets(scales, baseSize, expansionRatio) {
   return offsets;
 }
 
+// macOS swaps the Trash between an empty basket and a basket full of paper.
+// The freedesktop icon theme names the same two states, so the dock needs no
+// bundled artwork and inherits whatever trash art the theme ships.
+function trashIconName(isFull) {
+  return isFull ? "user-trash-full" : "user-trash";
+}
+
 // Calculate fixed unmagnified baseline coordinates
-function computeBaselineCenters(baseSize, spacing, pad, pinnedCount, unpinnedCount) {
+function computeBaselineCenters(baseSize, spacing, pad, pinnedCount, unpinnedCount, trashCount) {
   var curX = pad;
   var sepWidth = 7;
 
@@ -784,12 +791,35 @@ function computeBaselineCenters(baseSize, spacing, pad, pinnedCount, unpinnedCou
     }
   }
 
+  // macOS separates the Trash from the app icons with the same divider it uses
+  // between favorites and running apps, so the trash slot carries one extra
+  // `sepWidth` whenever an app item precedes it. `0`/undefined leaves the row
+  // untouched for callers without a trash.
+  var trashCenter = null;
+  if (trashCount > 0) {
+    if (pinnedCount > 0 || unpinnedCount > 0) curX += sepWidth;
+    trashCenter = curX + baseSize / 2;
+    curX += baseSize + spacing;
+  }
+
   var totalBaseWidth = curX - spacing + pad;
 
   return {
     launcher: launcherCenter,
     pinned: pinnedCenters,
     unpinned: unpinnedCenters,
+    trash: trashCenter,
     totalBaseWidth: totalBaseWidth
   };
 }
+
+// Upward displacement caused by magnification and launch bounce. Popups
+// anchored above an icon (tooltips, the window picker, context menus) subtract
+// this so they float cleanly above the magnified icon rather than overlapping it.
+function popupVerticalOffset(scale, iconSize, bounceY) {
+  var s = (typeof scale === "number" && isFinite(scale)) ? scale : 1.0;
+  var size = (typeof iconSize === "number" && isFinite(iconSize)) ? iconSize : 34;
+  var bounce = (typeof bounceY === "number" && isFinite(bounceY)) ? bounceY : 0;
+  return Math.round(Math.max(0, (s - 1.0) * size) - Math.min(0, bounce));
+}
+

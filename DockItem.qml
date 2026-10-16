@@ -50,6 +50,19 @@ Item {
   readonly property bool isFocused: root.itemData ? (root.itemData.isFocused === true) : false
   readonly property string appName: root.itemData ? String(root.itemData.name || "") : ""
   readonly property string appIcon: root.itemData ? String(root.itemData.icon || "") : ""
+  readonly property int windowCount: {
+    if (!root.itemData) return 0
+    if (typeof root.itemData.windowCount === "number") return root.itemData.windowCount
+    if (Array.isArray(root.itemData.windows)) return root.itemData.windows.length
+    return root.isRunning ? 1 : 0
+  }
+  readonly property int dotCount: root.isRunning ? Math.min(Math.max(1, root.windowCount), 5) : 0
+
+  // When the primary icon is a bundled asset that fails to load, callers may
+  // hand a themed icon name here to fall back to instead of the letter glyph.
+  property string fallbackIcon: ""
+  property bool iconLoadFailed: false
+  onAppIconChanged: root.iconLoadFailed = false
 
   function resolveIcon(raw) {
     var str = String(raw || "").trim()
@@ -191,7 +204,15 @@ Item {
       id: iconImage
       anchors.fill: parent
       fillMode: Image.PreserveAspectFit
-      source: root.resolveIcon(root.appIcon)
+      source: (root.iconLoadFailed && root.fallbackIcon)
+        ? root.resolveIcon(root.fallbackIcon)
+        : root.resolveIcon(root.appIcon)
+      onStatusChanged: {
+        // A missing bundled asset drops through to the themed icon once; an
+        // error on that fallback just leaves the letter glyph in place.
+        if (status === Image.Error && !root.iconLoadFailed && root.fallbackIcon)
+          root.iconLoadFailed = true
+      }
       sourceSize.width: Math.round(root.iconSize * 2 * Screen.devicePixelRatio)
       sourceSize.height: Math.round(root.iconSize * 2 * Screen.devicePixelRatio)
       asynchronous: true
@@ -324,32 +345,27 @@ Item {
     }
   }
 
-  // macOS-style running indicator: an unobtrusive dot below every open app.
-  // Opacity and scale communicate state without changing the Row's geometry.
+  // macOS-style running indicator: unobtrusive dots below every open app.
+  // One dot per open window (up to 5), matching multi-window state.
   Item {
     id: indicatorContainer
     anchors.horizontalCenter: parent.horizontalCenter
     anchors.bottom: parent.bottom
     anchors.bottomMargin: 1
-    width: 6
+    width: Math.max(6, indicatorRow.implicitWidth)
     height: 4
     transform: Translate {
       // Follow the icon's displacement while retaining the fixed-size running indicator
       x: root.isBeingDragged ? root.dragVisualX : root.animatedOffsetX
     }
 
-    Rectangle {
-      id: runningIndicator
-      visible: opacity > 0.01
+    Row {
+      id: indicatorRow
       anchors.centerIn: parent
+      spacing: 3
+      visible: opacity > 0.01
       opacity: root.isRunning ? 1 : 0
       scale: root.isRunning ? 1 : 0.6
-      width: 4
-      height: 4
-      radius: 2
-      color: root.isFocused
-        ? Util.alpha(Color.foreground, 0.95)
-        : Util.alpha(Color.foreground, 0.72)
 
       Behavior on opacity {
         NumberAnimation { duration: root.reduceMotion ? 0 : 140; easing.type: Easing.OutCubic }
@@ -359,8 +375,24 @@ Item {
         NumberAnimation { duration: root.reduceMotion ? 0 : 160; easing.type: Easing.OutCubic }
       }
 
-      Behavior on color {
-        ColorAnimation { duration: root.reduceMotion ? 0 : 140 }
+      Repeater {
+        id: indicatorRepeater
+        model: root.dotCount
+
+        Rectangle {
+          id: runningIndicator
+          objectName: "runningIndicator"
+          width: 4
+          height: 4
+          radius: 2
+          color: root.isFocused
+            ? Util.alpha(Color.foreground, 0.95)
+            : Util.alpha(Color.foreground, 0.72)
+
+          Behavior on color {
+            ColorAnimation { duration: root.reduceMotion ? 0 : 140 }
+          }
+        }
       }
     }
   }

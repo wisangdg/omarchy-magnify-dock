@@ -1,9 +1,5 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Effects
-import Quickshell
 import qs.Commons
-import qs.Ui
 
 Rectangle {
   id: root
@@ -13,6 +9,12 @@ Rectangle {
   property bool isAutoHide: true
   property bool isReserveSpace: false
   property bool isAudioMuted: false
+  // The same menu serves the Trash. A trash target hides every app-only row and
+  // offers "Empty Trash", the way macOS does it.
+  property bool isTrash: false
+  property bool isTrashEmpty: true
+  readonly property bool showAppRows: root.targetItem !== null && !root.isTrash
+  readonly property bool showDockRows: root.targetItem === null
   readonly property bool containsPointer: menuHover.hovered
 
   signal pinToggled(var item)
@@ -21,6 +23,7 @@ Rectangle {
   signal quitClicked(var item)
   signal launchClicked(var item)
   signal muteAudioToggled(var item)
+  signal emptyTrashRequested()
   signal autoHideToggled()
   signal reserveSpaceToggled()
   signal menuClosed()
@@ -64,7 +67,7 @@ Rectangle {
 
     // App Header if item selected
     Item {
-      visible: root.targetItem !== null
+      visible: root.showAppRows
       width: parent.width
       height: visible ? 24 : 0
 
@@ -85,15 +88,53 @@ Rectangle {
 
     // Divider
     Rectangle {
-      visible: root.targetItem !== null
+      visible: root.showAppRows
       width: parent.width
       height: 1
       color: Util.alpha(Color.foreground, 0.12)
     }
 
+    // Trash: the only action macOS offers on the Trash item itself. Greyed out
+    // while the trash is empty, like the Finder's Empty Trash item.
+    Rectangle {
+      visible: root.isTrash
+      width: parent.width
+      height: 26
+      radius: 6
+      color: (!root.isTrashEmpty && emptyTrashMouse.containsMouse)
+        ? Util.alpha(Color.accent, 0.2) : "transparent"
+
+      Row {
+        anchors.fill: parent
+        anchors.leftMargin: 8
+        spacing: 8
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "  Empty Trash"
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          color: Color.foreground
+          opacity: root.isTrashEmpty ? 0.45 : 1
+        }
+      }
+
+      MouseArea {
+        id: emptyTrashMouse
+        objectName: "emptyTrash"
+        anchors.fill: parent
+        hoverEnabled: true
+        enabled: !root.isTrashEmpty
+        cursorShape: Qt.PointingHandCursor
+        onClicked: {
+          root.menuClosed()
+          root.emptyTrashRequested()
+        }
+      }
+    }
+
     // Launch / Focus Action
     Rectangle {
-      visible: root.targetItem !== null
+      visible: root.showAppRows
       width: parent.width
       height: 26
       radius: 6
@@ -127,7 +168,7 @@ Rectangle {
 
     // Keep in Dock (Pin / Unpin)
     Rectangle {
-      visible: root.targetItem !== null
+      visible: root.showAppRows
       width: parent.width
       height: 26
       radius: 6
@@ -161,7 +202,7 @@ Rectangle {
 
     // Mute / Unmute Audio Action (Silent)
     Rectangle {
-      visible: root.targetItem !== null
+      visible: root.showAppRows
       width: parent.width
       height: visible ? 26 : 0
       radius: 6
@@ -195,7 +236,7 @@ Rectangle {
 
     // Quit / Close Action
     Rectangle {
-      visible: root.targetItem !== null && root.targetItem.isRunning
+      visible: root.showAppRows && root.targetItem.isRunning
       width: parent.width
       height: 26
       radius: 6
@@ -207,7 +248,7 @@ Rectangle {
         spacing: 8
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          text: "󰅖  Close Window"
+          text: "󰅖  Quit"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           color: Color.foreground
@@ -228,7 +269,7 @@ Rectangle {
     }
 
     Rectangle {
-      visible: root.targetItem !== null && root.targetItem.isRunning && root.canForceClose
+      visible: root.showAppRows && root.targetItem.isRunning && root.canForceClose
       width: parent.width
       height: 26
       radius: 6
@@ -260,8 +301,29 @@ Rectangle {
       }
     }
 
-    // Divider
+    // Dock Settings (shown when right-clicking divider or dock capsule)
+    Item {
+      visible: root.showDockRows
+      width: parent.width
+      height: visible ? 24 : 0
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.left: parent.left
+        anchors.leftMargin: 8
+        anchors.right: parent.right
+        anchors.rightMargin: 8
+        elide: Text.ElideRight
+        text: "Dock"
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        color: Color.accent
+      }
+    }
+
     Rectangle {
+      visible: root.showDockRows
       width: parent.width
       height: 1
       color: Util.alpha(Color.foreground, 0.12)
@@ -269,6 +331,7 @@ Rectangle {
 
     // Dock Settings Action
     Rectangle {
+      visible: root.showDockRows
       width: parent.width
       height: 26
       radius: 6
@@ -289,6 +352,7 @@ Rectangle {
 
       MouseArea {
         id: settingsMouse
+        objectName: "dockSettings"
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
@@ -301,6 +365,7 @@ Rectangle {
 
     // Auto-hide Toggle
     Rectangle {
+      visible: root.showDockRows
       width: parent.width
       height: 26
       radius: 6
@@ -334,6 +399,7 @@ Rectangle {
 
     // Reserve desktop space Toggle
     Rectangle {
+      visible: root.showDockRows
       width: parent.width
       height: 26
       radius: 6
@@ -364,5 +430,6 @@ Rectangle {
         }
       }
     }
+
   }
 }

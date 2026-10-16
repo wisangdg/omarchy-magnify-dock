@@ -38,6 +38,7 @@ Every animation runs at your monitor's native refresh rate (144Hz, 180Hz, 200Hz+
 * 🔔 **Unread Notification Badges** — Per-app badges mirror the Omarchy notification history. Opening an app from the dock clears its badge, macOS-style.
 * ⏱️ **Intelligent Auto-Hide & Edge Reveal** — Keep the dock persistently visible with exclusive tiling space, or enable smooth edge-reveal auto-hide that glides into view when your pointer approaches the bottom edge.
 * 🖱️ **Right-Click Context Menu** — Right-click any icon to bring windows to front, pin/unpin favorites ("Keep in Dock"), close active windows, or toggle dock preferences on the fly.
+* 🗑️ **macOS Trash, Empty and Full** — The Trash holds the last slot of the dock behind its own divider, staying fixed as the app icons magnify, and swaps between the empty basket and the overflowing one as the desktop trash fills and empties. Its icon is macOS-style artwork bundled with the plugin (`assets/trash-empty.svg`, `assets/trash-full.svg`), so it matches the real Dock regardless of the active icon theme and only falls back to the themed `user-trash` names if an asset is missing. Left-click opens the trash in the default file manager; right-click offers **Empty Trash** (greyed out while empty), which asks for confirmation before erasing, exactly like macOS.
 * 🖥️ **Native Multi-Monitor Support** — Automatically initializes independent, output-local dock instances across all connected displays without flickering or desync.
 * ⚡ **Zero-Flicker Architecture** — Built natively on Quickshell and Wayland Layer Shell (`wlr-layer-shell`) with optimized input masks for flicker-free hover transitions.
 
@@ -67,6 +68,7 @@ omarchy plugin remove wdg.dock --yes
 
 - **Omarchy / Quickshell** — the shell host that loads the `panel` plugin.
 - **Hyprland** (`hyprctl`) — window tracking, focus, close, and descendant PID lookup.
+- **GLib `gio`** — reads the trash state for the empty/full icon and runs **Empty Trash**. The same backend the file manager uses, so the dock agrees with it.
 - **PipeWire or PulseAudio** (`pactl`) and **Python 3** — used by `dock-audio.py` for the per-application "Mute Audio" action. Mute state is stored in `~/.config/omarchy/dock-muted-apps.json`.
 - **notify-send** (optional) — desktop notification when an app is muted or restored.
 
@@ -81,6 +83,8 @@ omarchy plugin remove wdg.dock --yes
 | **Quick Close / Unpin** | `Middle-Click` | Closes the running window, or toggles the application's pinned state. |
 | **Reorder Favorites** | `Click & Drag` | Drag any pinned app along the dock rail to reorder. |
 | **App Drawer / Launcher** | `Click 󰀻 Icon` | Toggles the native Omarchy application launcher (leftmost button). |
+| **Open Trash** | `Click 🗑️ Icon` | Opens the desktop trash in the file manager. |
+| **Empty Trash** | `Right-Click 🗑️ Icon` | Trash menu with **Empty Trash** (greyed out when empty); asks for confirmation before permanently erasing. |
 | **Reveal Dock** | `Cursor to Edge` | Instantly reveals the dock when in Auto-hide mode. |
 | **Choose a Window** | `Hover Running App` | Shows window titles and workspace/monitor labels. Click a row to focus that window or its close button to close only that window. |
 | **Dock Settings** | `Right-Click Launcher` | Opens live appearance and window-filter settings. Also available in any app's context menu. |

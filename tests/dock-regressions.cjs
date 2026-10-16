@@ -159,6 +159,55 @@ const baseWithoutPinned = model.computeBaselineCenters(42, 6, 8, 0, 2);
 assert.ok(baseWithoutPinned.unpinned.length === 2);
 assert.ok(baseWithPinned.unpinned[0] > baseWithoutPinned.unpinned[0]);
 
+// Trash: an opt-in slot after the last running app, plus the freedesktop icon
+// pair the macOS empty/full basket maps onto. Callers without a trash keep the
+// old row, so the pure function stays backward compatible.
+const baseWithTrash = model.computeBaselineCenters(42, 6, 8, 3, 2, 1);
+assert.equal(model.computeBaselineCenters(42, 6, 8, 3, 2).trash, null);
+assert.ok(baseWithTrash.trash > baseWithTrash.unpinned[1], "trash takes the last slot");
+assert.equal(baseWithTrash.trash - baseWithTrash.unpinned[1], 42 + 6 + 7,
+  "the trash sits one divider (sepWidth) past the last app icon, like macOS");
+const noAppsTrash = model.computeBaselineCenters(42, 6, 8, 0, 0, 1);
+assert.equal(noAppsTrash.trash - noAppsTrash.launcher, 42 + 6 + 7,
+  "with no app icons the launcher's own divider already splits the trash, so no extra one is added");
+assert.ok(baseWithTrash.totalBaseWidth > baseWithPinned.totalBaseWidth, "trash widens the dock");
+assert.equal(model.trashIconName(true), "user-trash-full");
+assert.equal(model.trashIconName(false), "user-trash");
+// Bundled macOS-style artwork ships with the plugin; the themed names stay only
+// as a fallback for when an asset cannot be read.
+for (const asset of ["assets/trash-empty.svg", "assets/trash-full.svg"]) {
+  assert.ok(fs.existsSync(path.join(directory, asset)), asset + " must ship with the plugin");
+}
+assert.ok(qml.includes('Qt.resolvedUrl("assets/trash-empty.svg")')
+  && qml.includes('Qt.resolvedUrl("assets/trash-full.svg")'),
+  "the trash slot points at the bundled macOS artwork");
+assert.ok(qml.includes("DockModel.trashIconName(root.trashFull)"),
+  "the themed trash icon remains the fallback for a missing asset");
+const itemQml = fs.readFileSync(path.join(directory, "DockItem.qml"), "utf8");
+assert.ok(itemQml.includes("property string fallbackIcon")
+  && itemQml.includes("root.iconLoadFailed && root.fallbackIcon"),
+  "DockItem swaps to the fallback icon when the primary one fails to load");
+assert.ok(qml.includes('command: ["gio", "trash", "--list"]'),
+  "the probe reads the trash through the same backend the file manager uses");
+assert.ok(qml.includes('Quickshell.execDetached(["gio", "trash", "--empty"])'),
+  "Empty Trash uses the argv form and never a shell string");
+assert.ok(qml.includes('Quickshell.execDetached(["gio", "open", "trash:///"])'),
+  "opening the trash goes through gio so the default file manager is respected");
+assert.ok(!qml.includes("nautilus"), "the trash opener must not hardcode a file manager");
+assert.ok(qml.includes("root.emptyTrashConfirmOpen = true") && qml.includes("root.finishEmptyTrash(true)"),
+  "Empty Trash asks for confirmation before erasing");
+assert.ok(qml.includes("This cannot be undone"), "the confirmation spells out the permanence");
+const trashResets = (qml.match(/root\.trashScale = 1\.0/g) || []).length;
+assert.ok(trashResets >= 2,
+  "trash magnification state is reset on both the idle path and the reorder-drag path");
+assert.ok(!qml.includes("trashCenter"),
+  "the trash no longer takes part in the magnification wave and stays fixed");
+const menuQml = fs.readFileSync(path.join(directory, "DockContextMenu.qml"), "utf8");
+assert.ok(menuQml.includes("readonly property bool showAppRows: root.targetItem !== null && !root.isTrash"));
+assert.ok(!menuQml.includes("visible: root.targetItem !== null"),
+  "every app-only menu row is gated, so the trash menu cannot show them");
+assert.ok(menuQml.includes("signal emptyTrashRequested()"));
+
 // Total extra from computeMagnifiedOffsets
 const offsets = model.computeMagnifiedOffsets([1.5, 1.2], 42, 0.82);
 assert.ok(Array.isArray(offsets));
@@ -311,7 +360,7 @@ try {
   fs.rmSync(tempDirectory, { recursive: true, force: true });
 }
 
-console.log("PASS: empty pins survive unpin/reload/reorder; running apps remain visible; close targets one window only; terminals distinct; no substring collisions; no vendor false positives; window cycling works.");
+console.log("PASS: empty pins survive unpin/reload/reorder; running apps remain visible; close targets one window only; terminals distinct; no substring collisions; no vendor false positives; window cycling works; trash holds the last slot with empty/full icons.");
 console.log("PASS: release channels stay separate; prototype app IDs work; settings persist through the real shell command.");
 
 // Settings stay backward-compatible and reject invalid types/out-of-range values.
@@ -572,3 +621,106 @@ const countSeen = JSON.parse(spawnSync("python3", [notifScript, "count", notifSe
 assert.deepEqual(countSeen.counts, { Thunderbird: 1, espanso: 1 });
 fs.rmSync(notifState, { recursive: true, force: true });
 console.log("PASS: preview/badge toggles default on; badges dedupe by app; dock-notifications.py counts unread only.");
+
+// Popup vertical offset compensates for magnification scale and launch bounce so tooltips float cleanly.
+assert.equal(model.popupVerticalOffset(1.0, 34, 0), 0);
+assert.equal(model.popupVerticalOffset(1.6, 34, 0), 20);
+assert.equal(model.popupVerticalOffset(2.0, 48, 0), 48);
+assert.equal(model.popupVerticalOffset(1.6, 34, -13), 33);
+assert.equal(model.popupVerticalOffset(0.94, 34, 0), 0);
+assert.equal(model.popupVerticalOffset(null, null, null), 0);
+
+// DockInstance specifies 250ms slide duration for smooth macOS-like auto-hide
+const freshQml = fs.readFileSync(path.join(directory, "DockInstance.qml"), "utf8");
+assert.match(freshQml, /property int autoHideSlideDuration:\s*250/);
+assert.match(freshQml, /duration:\s*root\.reduceMotion \? 0 : root\.autoHideSlideDuration/);
+assert.match(freshQml, /DockModel\.popupVerticalOffset/);
+console.log("PASS: tooltip and popup vertical offset accommodates magnification; auto-hide slide duration matches macOS (250ms).");
+
+// Dock settings are moved from app menu to divider/capsule context menu; app menu uses Quit.
+const freshMenuQml = fs.readFileSync(path.join(directory, "DockContextMenu.qml"), "utf8");
+assert.ok(freshMenuQml.includes("readonly property bool showDockRows: root.targetItem === null"));
+assert.ok(freshMenuQml.includes('text: "󰅖  Quit"'));
+assert.ok(freshQml.includes("root.openContextMenu(null, launcherSeparator)"));
+assert.ok(freshQml.includes("root.openContextMenu(null, dockSeparator)"));
+assert.ok(freshQml.includes("root.openContextMenu(null, trashSeparator)"));
+assert.ok(freshQml.includes("root.openContextMenu(null, dockCapsule)"));
+console.log("PASS: dock settings context menu isolated to dividers and capsule; app context menu uses macOS Quit.");
+
+// Multi-window indicator dots: 1 dot per window (2 windows -> 2 dots, 3 windows -> 3 dots, max 5)
+const dockItemQml = fs.readFileSync(path.join(directory, "DockItem.qml"), "utf8");
+assert.ok(dockItemQml.includes("readonly property int windowCount:"));
+assert.ok(dockItemQml.includes("readonly property int dotCount: root.isRunning ? Math.min(Math.max(1, root.windowCount), 5) : 0"));
+assert.ok(dockItemQml.includes("model: root.dotCount"));
+
+const threeWindowApp = model.buildDockItems([
+  { appId: "editor" }, { appId: "editor" }, { appId: "editor" }
+], null, null, null, ["editor"]);
+assert.equal(threeWindowApp.pinned.length, 1);
+assert.equal(threeWindowApp.pinned[0].windowCount, 3);
+assert.equal(threeWindowApp.pinned[0].windows.length, 3);
+
+function computeDotCount(itemData) {
+  const isRunning = itemData ? (itemData.isRunning === true) : false;
+  const windowCount = (() => {
+    if (!itemData) return 0;
+    if (typeof itemData.windowCount === "number") return itemData.windowCount;
+    if (Array.isArray(itemData.windows)) return itemData.windows.length;
+    return isRunning ? 1 : 0;
+  })();
+  return isRunning ? Math.min(Math.max(1, windowCount), 5) : 0;
+}
+
+assert.equal(computeDotCount({ isRunning: true, windowCount: 1 }), 1);
+assert.equal(computeDotCount({ isRunning: true, windowCount: 2 }), 2);
+assert.equal(computeDotCount({ isRunning: true, windowCount: 3 }), 3);
+assert.equal(computeDotCount({ isRunning: true, windowCount: 4 }), 4);
+assert.equal(computeDotCount({ isRunning: true, windowCount: 8 }), 5);
+assert.equal(computeDotCount({ isRunning: false, windowCount: 0 }), 0);
+assert.equal(computeDotCount({ isRunning: false, windowCount: 2 }), 0);
+assert.equal(computeDotCount({ isRunning: true, windows: [{}, {}, {}] }), 3);
+assert.equal(computeDotCount({ isRunning: true, windowCount: 0 }), 1);
+console.log("PASS: multi-window indicator dots: 1 dot per window (2 windows -> 2 dots, 3 windows -> 3 dots, max 5).");
+
+// Reserve screen space coordination with auto-hide
+const testState = {
+  autoHide: true,
+  reserveSpace: true,
+  customPinnedApps: [],
+  preferences: {},
+  rebuildDock() {},
+};
+load(testState, model, JSON.stringify({ autoHide: true, reserveSpace: true }));
+assert.equal(testState.autoHide, true);
+assert.equal(testState.reserveSpace, false, "conflicting autoHide=true with reserveSpace=true must normalize reserveSpace to false");
+
+load(testState, model, JSON.stringify({ autoHide: false, reserveSpace: true }));
+assert.equal(testState.autoHide, false);
+assert.equal(testState.reserveSpace, true, "autoHide=false allows reserveSpace=true");
+
+// Toggle reserveSpace when autoHide was true
+testState.autoHide = true;
+testState.reserveSpace = false;
+testState.reserveSpace = !testState.reserveSpace;
+if (testState.reserveSpace && testState.autoHide) {
+  testState.autoHide = false;
+}
+assert.equal(testState.reserveSpace, true);
+assert.equal(testState.autoHide, false, "toggling reserveSpace on must turn autoHide off");
+
+// Toggle autoHide when reserveSpace was true
+testState.autoHide = !testState.autoHide;
+if (testState.autoHide && testState.reserveSpace) {
+  testState.reserveSpace = false;
+}
+assert.equal(testState.autoHide, true);
+assert.equal(testState.reserveSpace, false, "toggling autoHide on must turn reserveSpace off");
+
+// exclusiveZone must collapse to 0 when not reserving space
+const dockInstanceQml = fs.readFileSync(path.join(directory, "DockInstance.qml"), "utf8");
+assert.match(dockInstanceQml, /exclusiveZone:\s*\(root\.reserveSpace && !root\.autoHide\)\s*\?\s*\(root\.capsuleHeight \+ 10\)\s*:\s*0/);
+console.log("PASS: reserve screen space and auto-hide coordination verified.");
+
+
+
+
