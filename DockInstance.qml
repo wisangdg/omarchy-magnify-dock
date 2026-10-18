@@ -7,6 +7,7 @@ import Quickshell.Io
 import Quickshell.Hyprland
 import QtQml.Models
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "DockModel.js" as DockModel
 
@@ -1205,8 +1206,8 @@ Item {
         implicitWidth: tooltipLabel.implicitWidth + 18
         implicitHeight: tooltipLabel.implicitHeight + 10
         radius: 7
-        color: Util.alpha(Color.background, 0.94)
-        border.color: Util.alpha(Color.foreground, 0.2)
+        color: Util.alpha(Commons.Color.background, 0.94)
+        border.color: Util.alpha(Commons.Color.foreground, 0.2)
         border.width: 1
 
         Text {
@@ -1216,7 +1217,7 @@ Item {
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           font.bold: true
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
     }
@@ -1280,8 +1281,8 @@ Item {
         width: 360
         height: forceCloseCol.implicitHeight + 28
         radius: 12
-        color: Util.alpha(Color.background, 0.98)
-        border.color: Util.alpha(Color.urgent, 0.6)
+        color: Util.alpha(Commons.Color.background, 0.98)
+        border.color: Util.alpha(Commons.Color.urgent, 0.6)
         border.width: 1
 
         Column {
@@ -1293,7 +1294,7 @@ Item {
           Text {
             width: parent.width
             text: "Force Close Window?"
-            color: Color.urgent
+            color: Commons.Color.urgent
             font.family: Style.font.family
             font.pixelSize: Style.font.title
             font.bold: true
@@ -1304,7 +1305,7 @@ Item {
             text: root.forceCloseTarget
               ? "Force close “" + root.forceCloseTarget.title + "”?\nUnsaved data will be lost. Other windows in the same process may also close."
               : ""
-            color: Color.foreground
+            color: Commons.Color.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap
@@ -1318,14 +1319,14 @@ Item {
               width: 80
               height: 28
               radius: 6
-              color: cancelMouse.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
-              border.color: Util.alpha(Color.foreground, 0.25)
+              color: cancelMouse.containsMouse ? Util.alpha(Commons.Color.foreground, 0.12) : "transparent"
+              border.color: Util.alpha(Commons.Color.foreground, 0.25)
               border.width: 1
 
               Text {
                 anchors.centerIn: parent
                 text: "Cancel"
-                color: Color.foreground
+                color: Commons.Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
@@ -1343,14 +1344,14 @@ Item {
               width: 100
               height: 28
               radius: 6
-              color: confirmMouse.containsMouse ? Util.alpha(Color.urgent, 0.3) : Util.alpha(Color.urgent, 0.18)
-              border.color: Color.urgent
+              color: confirmMouse.containsMouse ? Util.alpha(Commons.Color.urgent, 0.3) : Util.alpha(Commons.Color.urgent, 0.18)
+              border.color: Commons.Color.urgent
               border.width: 1
 
               Text {
                 anchors.centerIn: parent
                 text: "Force Close"
-                color: Color.urgent
+                color: Commons.Color.urgent
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -1391,8 +1392,8 @@ Item {
         width: 360
         height: emptyTrashCol.implicitHeight + 28
         radius: 12
-        color: Util.alpha(Color.background, 0.98)
-        border.color: Util.alpha(Color.urgent, 0.6)
+        color: Util.alpha(Commons.Color.background, 0.98)
+        border.color: Util.alpha(Commons.Color.urgent, 0.6)
         border.width: 1
 
         Column {
@@ -1404,7 +1405,7 @@ Item {
           Text {
             width: parent.width
             text: "Empty Trash?"
-            color: Color.urgent
+            color: Commons.Color.urgent
             font.family: Style.font.family
             font.pixelSize: Style.font.title
             font.bold: true
@@ -1413,7 +1414,7 @@ Item {
           Text {
             width: parent.width
             text: "Are you sure you want to permanently erase the items in the Trash? This cannot be undone."
-            color: Color.foreground
+            color: Commons.Color.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap
@@ -1427,14 +1428,14 @@ Item {
               width: 80
               height: 28
               radius: 6
-              color: trashCancelMouse.containsMouse ? Util.alpha(Color.foreground, 0.12) : "transparent"
-              border.color: Util.alpha(Color.foreground, 0.25)
+              color: trashCancelMouse.containsMouse ? Util.alpha(Commons.Color.foreground, 0.12) : "transparent"
+              border.color: Util.alpha(Commons.Color.foreground, 0.25)
               border.width: 1
 
               Text {
                 anchors.centerIn: parent
                 text: "Cancel"
-                color: Color.foreground
+                color: Commons.Color.foreground
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
@@ -1452,14 +1453,14 @@ Item {
               width: 100
               height: 28
               radius: 6
-              color: trashConfirmMouse.containsMouse ? Util.alpha(Color.urgent, 0.3) : Util.alpha(Color.urgent, 0.18)
-              border.color: Color.urgent
+              color: trashConfirmMouse.containsMouse ? Util.alpha(Commons.Color.urgent, 0.3) : Util.alpha(Commons.Color.urgent, 0.18)
+              border.color: Commons.Color.urgent
               border.width: 1
 
               Text {
                 anchors.centerIn: parent
                 text: "Empty Trash"
-                color: Color.urgent
+                color: Commons.Color.urgent
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -1681,8 +1682,8 @@ Item {
       }
 
       // Frosted Glass Appearance matching Omarchy theme
-      color: Util.alpha(Color.background, root.preferences.opacity)
-      border.color: Util.alpha(Color.foreground, 0.16)
+      color: Util.alpha(Commons.Color.background, root.preferences.opacity)
+      border.color: Util.alpha(Commons.Color.foreground, 0.16)
       border.width: 1
 
       // Top Specular Highlight for 3D glass effect
@@ -1740,15 +1741,15 @@ Item {
               anchors.fill: parent
               radius: 10
               color: launcherMouse.containsMouse
-                ? Util.alpha(Color.accent, 0.25)
-                : Util.alpha(Color.foreground, 0.08)
+                ? Util.alpha(Commons.Color.accent, 0.25)
+                : Util.alpha(Commons.Color.foreground, 0.08)
 
               Text {
                 anchors.centerIn: parent
                 text: "󰀻"
                 font.family: Style.font.family
                 font.pixelSize: 20
-                color: Color.accent
+                color: Commons.Color.accent
               }
             }
 
@@ -1774,7 +1775,7 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           width: 1
           height: root.iconPixelSize * 0.65
-          color: Util.alpha(Color.foreground, 0.16)
+          color: Util.alpha(Commons.Color.foreground, 0.16)
 
           MouseArea {
             anchors.centerIn: parent
@@ -1866,7 +1867,7 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           width: 1
           height: root.iconPixelSize * 0.65
-          color: Util.alpha(Color.foreground, 0.16)
+          color: Util.alpha(Commons.Color.foreground, 0.16)
 
           MouseArea {
             anchors.centerIn: parent
@@ -1943,7 +1944,7 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           width: 1
           height: root.iconPixelSize * 0.65
-          color: Util.alpha(Color.foreground, 0.16)
+          color: Util.alpha(Commons.Color.foreground, 0.16)
 
           MouseArea {
             anchors.centerIn: parent

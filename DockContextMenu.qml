@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 Rectangle {
   id: root
@@ -40,8 +41,8 @@ Rectangle {
   implicitWidth: 190
   implicitHeight: menuColumn.implicitHeight + 16
   radius: 12
-  color: Util.alpha(Color.background, 0.94)
-  border.color: Util.alpha(Color.foreground, 0.18)
+  color: Util.alpha(Commons.Color.background, 0.94)
+  border.color: Util.alpha(Commons.Color.foreground, 0.18)
   border.width: 1
 
   HoverHandler {
@@ -82,7 +83,7 @@ Rectangle {
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         font.bold: true
-        color: Color.accent
+        color: Commons.Color.accent
       }
     }
 
@@ -91,7 +92,7 @@ Rectangle {
       visible: root.showAppRows
       width: parent.width
       height: 1
-      color: Util.alpha(Color.foreground, 0.12)
+      color: Util.alpha(Commons.Color.foreground, 0.12)
     }
 
     // Trash: the only action macOS offers on the Trash item itself. Greyed out
@@ -102,7 +103,7 @@ Rectangle {
       height: 26
       radius: 6
       color: (!root.isTrashEmpty && emptyTrashMouse.containsMouse)
-        ? Util.alpha(Color.accent, 0.2) : "transparent"
+        ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -113,7 +114,7 @@ Rectangle {
           text: "  Empty Trash"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
           opacity: root.isTrashEmpty ? 0.45 : 1
         }
       }
@@ -138,7 +139,7 @@ Rectangle {
       width: parent.width
       height: 26
       radius: 6
-      color: launchMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+      color: launchMouse.containsMouse ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -149,7 +150,7 @@ Rectangle {
           text: root.targetItem && root.targetItem.isRunning ? "󰖯  Bring to Front" : "󱂬  Open"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
 
@@ -172,7 +173,7 @@ Rectangle {
       width: parent.width
       height: 26
       radius: 6
-      color: pinMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+      color: pinMouse.containsMouse ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -183,7 +184,7 @@ Rectangle {
           text: (root.targetItem && root.targetItem.isPinned) ? "✓  Keep in Dock" : "    Keep in Dock"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
 
@@ -206,7 +207,7 @@ Rectangle {
       width: parent.width
       height: visible ? 26 : 0
       radius: 6
-      color: muteMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+      color: muteMouse.containsMouse ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -217,7 +218,7 @@ Rectangle {
           text: root.isAudioMuted ? "󰕾  Unmute Audio" : "󰝟  Mute Audio (Silent)"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
 
@@ -240,7 +241,7 @@ Rectangle {
       width: parent.width
       height: 26
       radius: 6
-      color: quitMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+      color: quitMouse.containsMouse ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -251,7 +252,7 @@ Rectangle {
           text: "󰅖  Quit"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
 
@@ -273,7 +274,7 @@ Rectangle {
       width: parent.width
       height: 26
       radius: 6
-      color: forceMouse.containsMouse ? Util.alpha(Color.urgent, 0.2) : "transparent"
+      color: forceMouse.containsMouse ? Util.alpha(Commons.Color.urgent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -284,7 +285,7 @@ Rectangle {
           text: "󰅙  Force Close…"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.urgent
+          color: Commons.Color.urgent
         }
       }
 
@@ -318,7 +319,7 @@ Rectangle {
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         font.bold: true
-        color: Color.accent
+        color: Commons.Color.accent
       }
     }
 
@@ -326,7 +327,7 @@ Rectangle {
       visible: root.showDockRows
       width: parent.width
       height: 1
-      color: Util.alpha(Color.foreground, 0.12)
+      color: Util.alpha(Commons.Color.foreground, 0.12)
     }
 
     // Dock Settings Action
@@ -335,7 +336,7 @@ Rectangle {
       width: parent.width
       height: 26
       radius: 6
-      color: settingsMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+      color: settingsMouse.containsMouse ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -346,7 +347,7 @@ Rectangle {
           text: "󰒓  Dock Settings…"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
 
@@ -369,7 +370,7 @@ Rectangle {
       width: parent.width
       height: 26
       radius: 6
-      color: autoHideMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+      color: autoHideMouse.containsMouse ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -380,7 +381,7 @@ Rectangle {
           text: root.isAutoHide ? "✓  Auto-hide Dock" : "    Auto-hide Dock"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
 
@@ -403,7 +404,7 @@ Rectangle {
       width: parent.width
       height: 26
       radius: 6
-      color: reserveMouse.containsMouse ? Util.alpha(Color.accent, 0.2) : "transparent"
+      color: reserveMouse.containsMouse ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
 
       Row {
         anchors.fill: parent
@@ -414,7 +415,7 @@ Rectangle {
           text: root.isReserveSpace ? "✓  Reserve screen space" : "    Reserve screen space"
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
-          color: Color.foreground
+          color: Commons.Color.foreground
         }
       }
 

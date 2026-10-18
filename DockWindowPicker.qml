@@ -3,6 +3,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 
 Rectangle {
   id: root
@@ -18,8 +19,8 @@ Rectangle {
   width: root.showPreviews ? 430 : 350
   height: Math.min(maxHeight, 54 + rows.length * root.rowHeight)
   radius: 12
-  color: Util.alpha(Color.background, 0.98)
-  border.color: Util.alpha(Color.foreground, 0.2)
+  color: Util.alpha(Commons.Color.background, 0.98)
+  border.color: Util.alpha(Commons.Color.foreground, 0.2)
   HoverHandler { id: hover }
 
   RowLayout {
@@ -30,7 +31,7 @@ Rectangle {
     height: 36
     Text {
       text: root.title + " · " + root.rows.length
-      color: Color.foreground
+      color: Commons.Color.foreground
       font.bold: true
       elide: Text.ElideRight
       Layout.fillWidth: true
@@ -67,7 +68,7 @@ Rectangle {
         background: Rectangle {
           radius: 6
           color: focusButton.hovered || windowRow.modelData.active
-            ? Util.alpha(Color.accent, 0.2) : "transparent"
+            ? Util.alpha(Commons.Color.accent, 0.2) : "transparent"
         }
         contentItem: RowLayout {
           spacing: 8
@@ -93,7 +94,7 @@ Rectangle {
               text: windowRow.modelData.title
               elide: Text.ElideRight
               textFormat: Text.PlainText
-              color: Color.foreground
+              color: Commons.Color.foreground
               font.bold: windowRow.modelData.active
             }
             Text {
@@ -101,7 +102,7 @@ Rectangle {
               text: windowRow.modelData.location
               elide: Text.ElideRight
               textFormat: Text.PlainText
-              color: Color.foreground
+              color: Commons.Color.foreground
               opacity: 0.65
               font.pixelSize: 11
             }

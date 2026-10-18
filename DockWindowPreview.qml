@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 
 // A still thumbnail of one Wayland toplevel. Loaded lazily by the window
 // picker so nothing touches the screencopy protocol until a preview is shown.
@@ -20,7 +21,7 @@ Item {
   Rectangle {
     anchors.fill: parent
     radius: 6
-    color: Util.alpha(Color.foreground, 0.1)
+    color: Util.alpha(Commons.Color.foreground, 0.1)
   }
 
   ScreencopyView {
@@ -43,6 +44,6 @@ Item {
     text: "󰖯"
     font.family: Style.font.family
     font.pixelSize: 22
-    color: Util.alpha(Color.foreground, 0.5)
+    color: Util.alpha(Commons.Color.foreground, 0.5)
   }
 }

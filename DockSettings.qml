@@ -3,6 +3,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 
 Rectangle {
   id: root
@@ -13,8 +14,8 @@ Rectangle {
   width: 340
   height: Math.min(maxHeight, settingsColumn.implicitHeight + 28)
   radius: 12
-  color: Util.alpha(Color.background, 0.98)
-  border.color: Util.alpha(Color.foreground, 0.2)
+  color: Util.alpha(Commons.Color.background, 0.98)
+  border.color: Util.alpha(Commons.Color.foreground, 0.2)
 
   ScrollView {
     anchors.fill: parent
@@ -29,7 +30,7 @@ Rectangle {
         Layout.fillWidth: true
         Text {
           text: "Dock Settings"
-          color: Color.foreground
+          color: Commons.Color.foreground
           font.bold: true
           font.pixelSize: 16
           Layout.fillWidth: true
@@ -42,7 +43,7 @@ Rectangle {
       }
       Text {
         text: "Changes preview immediately and save automatically."
-        color: Color.foreground
+        color: Commons.Color.foreground
         opacity: 0.7
         wrapMode: Text.WordWrap
         Layout.fillWidth: true
@@ -66,14 +67,14 @@ Rectangle {
             Layout.fillWidth: true
             Text {
               text: settingRow.modelData.label
-              color: Color.foreground
+              color: Commons.Color.foreground
               Layout.fillWidth: true
             }
             Text {
               text: (settingRow.modelData.key === "opacity"
                 ? Math.round(control.value * 100)
                 : Math.round(control.value * 100) / 100) + settingRow.modelData.unit
-              color: Color.foreground
+              color: Commons.Color.foreground
             }
           }
           Slider {
@@ -89,7 +90,7 @@ Rectangle {
           }
         }
       }
-      Text { text: "Show running windows from"; color: Color.foreground }
+      Text { text: "Show running windows from"; color: Commons.Color.foreground }
       ComboBox {
         objectName: "windowScope"
         Layout.fillWidth: true
@@ -104,7 +105,7 @@ Rectangle {
         Layout.fillWidth: true
         Text {
           text: "Window previews on hover"
-          color: Color.foreground
+          color: Commons.Color.foreground
           Layout.fillWidth: true
         }
         Switch {
@@ -118,7 +119,7 @@ Rectangle {
         Layout.fillWidth: true
         Text {
           text: "Notification badges"
-          color: Color.foreground
+          color: Commons.Color.foreground
           Layout.fillWidth: true
         }
         Switch {
@@ -130,7 +131,7 @@ Rectangle {
       }
       Text {
         text: "Pinned apps remain available in every mode. Reveal and hide delays apply when Auto-hide is enabled."
-        color: Color.foreground
+        color: Commons.Color.foreground
         opacity: 0.7
         wrapMode: Text.WordWrap
         Layout.fillWidth: true

@@ -4,6 +4,7 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "DockModel.js" as DockModel
 
@@ -226,7 +227,7 @@ Item {
         text: root.appName.length > 0 ? root.appName.charAt(0).toUpperCase() : "★"
         font.pixelSize: 16
         font.bold: true
-        color: Color.foreground
+        color: Commons.Color.foreground
       }
     }
 
@@ -386,8 +387,8 @@ Item {
           height: 4
           radius: 2
           color: root.isFocused
-            ? Util.alpha(Color.foreground, 0.95)
-            : Util.alpha(Color.foreground, 0.72)
+            ? Util.alpha(Commons.Color.foreground, 0.95)
+            : Util.alpha(Commons.Color.foreground, 0.72)
 
           Behavior on color {
             ColorAnimation { duration: root.reduceMotion ? 0 : 140 }
