@@ -80,6 +80,7 @@ Rectangle {
         anchors.rightMargin: 8
         elide: Text.ElideRight
         text: root.targetItem ? String(root.targetItem.name || "") : ""
+        textFormat: Text.PlainText
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
         font.bold: true

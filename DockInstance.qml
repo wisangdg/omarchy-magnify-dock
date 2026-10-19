@@ -1214,6 +1214,7 @@ Item {
           id: tooltipLabel
           anchors.centerIn: parent
           text: root.tooltipText
+          textFormat: Text.PlainText
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           font.bold: true
@@ -1305,6 +1306,7 @@ Item {
             text: root.forceCloseTarget
               ? "Force close “" + root.forceCloseTarget.title + "”?\nUnsaved data will be lost. Other windows in the same process may also close."
               : ""
+            textFormat: Text.PlainText
             color: Commons.Color.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
