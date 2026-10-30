@@ -187,8 +187,14 @@ const itemQml = fs.readFileSync(path.join(directory, "DockItem.qml"), "utf8");
 assert.ok(itemQml.includes("property string fallbackIcon")
   && itemQml.includes("root.iconLoadFailed && root.fallbackIcon"),
   "DockItem swaps to the fallback icon when the primary one fails to load");
-assert.ok(qml.includes('command: ["gio", "trash", "--list"]'),
+const sharedQml = fs.readFileSync(path.join(directory, "Dock.qml"), "utf8");
+assert.ok(sharedQml.includes('command: ["gio", "trash", "--list"]'),
   "the probe reads the trash through the same backend the file manager uses");
+assert.ok(sharedQml.includes('command: ["gio", "monitor", "trash:///"]')
+  && !qml.includes("trashProbe"),
+  "one shared watcher drives the trash probe instead of a poll per monitor");
+assert.ok(!qml.includes("iconIndexScan") && sharedQml.includes("id: iconIndexScan"),
+  "the icon directories are scanned once, not once per monitor");
 assert.ok(qml.includes('Quickshell.execDetached(["gio", "trash", "--empty"])'),
   "Empty Trash uses the argv form and never a shell string");
 assert.ok(qml.includes('Quickshell.execDetached(["gio", "open", "trash:///"])'),
@@ -460,8 +466,14 @@ assert.equal(restored.preferences.iconSize, 52, "external reload must not overwr
 console.log("PASS: settings restore after reload; pending preview survives file watcher updates.");
 
 // Per-application audio mute tests
-const loadMuted = handler("loadMutedApps", "isAppAudioMuted", ["rawText"]);
-const isMuted = handler("isAppAudioMuted", "toggleAppAudio", ["item"]);
+// Mute state is shared in Dock.qml so one sync loop serves every monitor.
+function sharedHandler(name, next, parameters) {
+  const body = sharedQml.split(`  function ${name}(`)[1].split(`\n  function ${next}(`)[0];
+  return new Function("root", "DockModel", ...parameters,
+    body.slice(body.indexOf("{") + 1).replace(/\n  }\s*$/, ""));
+}
+const loadMuted = sharedHandler("loadMutedApps", "isAppAudioMuted", ["rawText"]);
+const isMuted = sharedHandler("isAppAudioMuted", "toggleAppAudio", ["item"]);
 
 const audioRoot = {
   mutedAppsMap: {},

@@ -77,6 +77,16 @@ def counts(root, seen):
     return result
 
 
+def change_signature(root, seen_path):
+    stamps = []
+    for path in (root, os.path.join(root, "history"), seen_path):
+        try:
+            stamps.append(os.stat(path).st_mtime_ns)
+        except OSError:
+            stamps.append(None)
+    return tuple(stamps)
+
+
 def emit(root, seen_path):
     print(json.dumps({"counts": counts(root, seen_map(seen_path))}), flush=True)
 
@@ -91,11 +101,17 @@ def main(argv):
         emit(root, seen_path)
         return 0
     last = None
+    last_signature = None
     while True:
-        current = counts(root, seen_map(seen_path))
-        if current != last:
-            print(json.dumps({"counts": current}), flush=True)
-            last = current
+        # Notifications arrive and move as whole files, which bumps the
+        # directory mtime; only then is re-reading every JSON file worth it.
+        signature = change_signature(root, seen_path)
+        if signature != last_signature:
+            last_signature = signature
+            current = counts(root, seen_map(seen_path))
+            if current != last:
+                print(json.dumps({"counts": current}), flush=True)
+                last = current
         time.sleep(2)
     return 0
 

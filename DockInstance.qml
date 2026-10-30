@@ -23,10 +23,10 @@ Item {
   // panel receives null. Icons would then depend solely on Qt's themed lookup,
   // whose theme listing is built once at shell start: an app installed after
   // that renders as the generic executable gear until the shell restarts.
-  // Scan the XDG icon directories ourselves so app icons stay correct.
+  // Dock.qml scans the XDG icon directories once so app icons stay correct.
   property var appLibrary: shell ? shell.appLibrary : null
-  property var iconIndex: ({})
-  property var pendingIconIndex: ({})
+  property var iconIndex: root.launcher ? root.launcher.iconIndex : ({})
+  onIconIndexChanged: root.rebuildDock()
   readonly property var iconLibrary: root.appLibrary ? root.appLibrary : localIconLibrary
 
   QtObject {
@@ -93,10 +93,8 @@ Item {
   function finishEmptyTrash(confirmed) {
     root.emptyTrashConfirmOpen = false
     if (confirmed) {
+      // The trash watcher in Dock.qml re-probes once the files are gone.
       Quickshell.execDetached(["gio", "trash", "--empty"])
-      // Re-probe now so the icon can drop to the empty basket without waiting
-      // for the next tick; the timer covers the losing race.
-      trashProbe.running = true
     }
     root.scheduleDockHide()
   }
@@ -274,8 +272,7 @@ Item {
   // macOS Trash: always the rightmost item, in the running-app group, with no
   // running dot, no badge and no drag handle. `isPinned: false` keeps it out of
   // the reorder logic, and the icon pair switches on the trash's real state.
-  property bool trashFull: false
-  property bool trashProbeSawEntry: false
+  property bool trashFull: root.launcher ? root.launcher.trashFull : false
   // macOS-style Trash artwork bundled with the plugin (authored, not Apple art)
   // so the icon matches the real Dock regardless of the desktop icon theme. If
   // an asset is ever missing, DockItem falls back to the freedesktop theme names.
@@ -494,107 +491,13 @@ Item {
     }
   }
 
-  // Muted Apps State Persistence & Audio Control
-  readonly property string mutedAppsPath: Quickshell.env("HOME") + "/.config/omarchy/dock-muted-apps.json"
-  readonly property string dockAudioScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/wdg.dock/dock-audio.py"
-  property var mutedAppsMap: ({})
-
-  FileView {
-    id: mutedAppsFileView
-    path: root.mutedAppsPath
-    watchChanges: true
-    onFileChanged: reload()
-    printErrors: false
-    onLoaded: root.loadMutedApps(text())
-    onLoadFailed: root.loadMutedApps("")
-  }
-
-  function loadMutedApps(rawText) {
-    try {
-      if (rawText && rawText.trim().length > 0) {
-        var parsed = JSON.parse(rawText)
-        if (parsed && typeof parsed === "object") {
-          root.mutedAppsMap = parsed
-          return
-        }
-      }
-    } catch (e) {}
-    root.mutedAppsMap = ({})
-  }
-
+  // Mute state lives in Dock.qml so one sync loop serves every monitor.
   function isAppAudioMuted(item) {
-    if (!item) return false
-    var map = root.mutedAppsMap || {}
-    var id = String(item.id || "")
-    var name = String(item.name || "")
-    if (id && map[id] === true) return true
-    if (name && map[name] === true) return true
-    for (var k in map) {
-      if (!map[k]) continue
-      if (id && (k === id || DockModel.matchApp(k, id))) return true
-      if (name && (k === name || DockModel.normalizeId(k) === DockModel.normalizeId(name))) return true
-    }
-    return false
+    return root.launcher ? root.launcher.isAppAudioMuted(item) : false
   }
 
   function toggleAppAudio(item) {
-    if (!item) return
-    var appId = String(item.id || "")
-    var appName = String(item.name || "")
-    // Update the intent map before the script runs so the sync timer stops
-    // immediately on unmute; otherwise it can re-mute the stream in the gap
-    // before the persisted file is reloaded.
-    var next = Object.assign({}, root.mutedAppsMap)
-    if (root.isAppAudioMuted(item)) {
-      if (appId) delete next[appId]
-      if (appName) delete next[appName]
-    } else {
-      if (appId) next[appId] = true
-      if (appName) next[appName] = true
-    }
-    root.mutedAppsMap = next
-    var cmd = "python3 " + Util.shellQuote(root.dockAudioScript) + " toggle " + Util.shellQuote(appId) + " " + Util.shellQuote(appName)
-    Util.execDetached(cmd)
-  }
-
-  // A saved mute must also cover streams that appear after the menu action,
-  // otherwise muting a silent app (or one that restarts playback) has no effect.
-  Timer {
-    id: audioSyncTimer
-    interval: 1500
-    repeat: true
-    running: Object.keys(root.mutedAppsMap).length > 0
-    onTriggered: audioSyncProc.running = true
-  }
-
-  Process {
-    id: audioSyncProc
-    command: ["python3", root.dockAudioScript, "sync"]
-  }
-
-  // Trash state for the empty/full icon. gio reads the trash through the same
-  // GLib/GVfs backend the file manager and the Empty Trash action use, so the
-  // icon matches the trash the user actually sees.
-  // ponytail: 1s poll of a ~10ms command; swap for an inotify watch on the
-  // trash directories if the spawn ever shows up in power profiling.
-  Timer {
-    id: trashProbeTimer
-    interval: 1000
-    repeat: true
-    running: true
-    onTriggered: trashProbe.running = true
-  }
-
-  Process {
-    id: trashProbe
-    command: ["gio", "trash", "--list"]
-    onStarted: root.trashProbeSawEntry = false
-    stdout: SplitParser {
-      onRead: function(line) {
-        if (String(line).trim().length > 0) root.trashProbeSawEntry = true
-      }
-    }
-    onExited: root.trashFull = root.trashProbeSawEntry
+    if (root.launcher) root.launcher.toggleAppAudio(item)
   }
 
   // Settings File Persistence
@@ -967,12 +870,19 @@ Item {
       target: modelData
       function onWorkspaceChanged() { Qt.callLater(root.rebuildDock) }
       function onMonitorChanged() { Qt.callLater(root.rebuildDock) }
-      function onTitleChanged() { Qt.callLater(root.rebuildDock) }
+      // Browsers, terminals and players retitle many times a second; coalesce
+      // those into at most one rebuild per throttle interval.
+      function onTitleChanged() { if (!titleRebuildThrottle.running) titleRebuildThrottle.start() }
       function onWaylandHandleChanged() { Qt.callLater(root.rebuildDock) }
       // Hyprland IPC data (class, pid, stable_id) can arrive after the window
       // first appears, so rebuild once it lands and windowMetadata picks it up.
       function onLastIpcObjectChanged() { Qt.callLater(root.rebuildDock) }
     }
+  }
+  Timer {
+    id: titleRebuildThrottle
+    interval: 250
+    onTriggered: root.rebuildDock()
   }
   Connections {
     target: Hyprland.toplevels
@@ -1032,7 +942,6 @@ Item {
     target: DesktopEntries.applications
     function onValuesChanged() {
       root.rebuildDock()
-      iconIndexDebounce.restart()
     }
   }
 
@@ -1041,54 +950,9 @@ Item {
     function onAppsChanged() { root.rebuildDock() }
   }
 
-  // Maps an icon name to a file on disk (e.g. "microsoft-edge" ->
-  // ".../hicolor/128x128/apps/microsoft-edge.png"). Registered before Qt's
-  // themed lookup in DockModel.resolveIcon, so an icon that Qt's startup-time
-  // theme listing never saw still resolves. SVGs are listed before PNGs so the
-  // first hit per name is the scalable one.
-  function indexIconLine(line) {
-    var value = String(line || "").trim()
-    if (value.length === 0) return
-    var slash = value.lastIndexOf("/")
-    var file = slash >= 0 ? value.slice(slash + 1) : value
-    var dot = file.lastIndexOf(".")
-    var name = dot > 0 ? file.slice(0, dot) : file
-    if (name.length > 0 && root.pendingIconIndex[name] === undefined)
-      root.pendingIconIndex[name] = value
-  }
-
-  Process {
-    id: iconIndexScan
-    command: ["bash", "-c",
-      "dirs=\"$HOME/.icons $HOME/.local/share/icons\";" +
-      "IFS=\":\"; for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do dirs=\"$dirs $d/icons\"; done; unset IFS;" +
-      "for ext in svg png; do" +
-      "  for base in $dirs; do" +
-      "    [[ -d $base ]] && find \"$base\" \\( -path \"*/apps/*\" -o -path \"*/devices/*\" \\) -name \"*.$ext\" 2>/dev/null;" +
-      "  done;" +
-      "  find /usr/share/pixmaps -maxdepth 1 -name \"*.$ext\" 2>/dev/null;" +
-      "done"
-    ]
-    stdout: SplitParser { onRead: function(line) { root.indexIconLine(line) } }
-    onStarted: root.pendingIconIndex = ({})
-    // Publish the finished index, then rebuild so items that fell back to the
-    // generic gear during the scan pick up their real icon.
-    onExited: {
-      root.iconIndex = root.pendingIconIndex
-      root.rebuildDock()
-    }
-  }
-
-  Timer {
-    id: iconIndexDebounce
-    interval: 750
-    onTriggered: if (!iconIndexScan.running) iconIndexScan.running = true
-  }
-
   Component.onCompleted: {
     console.log("macOS dock instance ready", root.dockScreen ? root.dockScreen.name : "no-screen")
     if (root.appLibrary) root.appLibrary.refreshIcons()
-    iconIndexScan.running = true
     root.rebuildDock()
   }
 
