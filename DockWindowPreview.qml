@@ -18,10 +18,13 @@ Item {
     if (capture.captureSource) capture.captureFrame()
   }
 
+  // Only the glyph fallback gets a box; a captured thumbnail stays frameless so
+  // the letterboxing around its aspect ratio never reads as a gray dead area.
   Rectangle {
     anchors.fill: parent
     radius: 6
     color: Util.alpha(Commons.Color.foreground, 0.1)
+    visible: !capture.hasContent
   }
 
   ScreencopyView {
