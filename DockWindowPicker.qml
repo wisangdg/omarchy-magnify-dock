@@ -38,6 +38,7 @@ Rectangle {
     height: 26
     Text {
       text: root.title + " · " + root.rows.length
+      textFormat: Text.PlainText
       color: Commons.Color.foreground
       font.bold: true
       elide: Text.ElideRight

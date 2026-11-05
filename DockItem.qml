@@ -225,6 +225,7 @@ Item {
         visible: iconImage.status !== Image.Ready
         anchors.centerIn: parent
         text: root.appName.length > 0 ? root.appName.charAt(0).toUpperCase() : "★"
+        textFormat: Text.PlainText
         font.pixelSize: 16
         font.bold: true
         color: Commons.Color.foreground

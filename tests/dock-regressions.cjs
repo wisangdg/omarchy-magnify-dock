@@ -733,6 +733,19 @@ const dockInstanceQml = fs.readFileSync(path.join(directory, "DockInstance.qml")
 assert.match(dockInstanceQml, /exclusiveZone:\s*\(root\.reserveSpace && !root\.autoHide\)\s*\?\s*\(root\.capsuleHeight \+ 10\)\s*:\s*0/);
 console.log("PASS: reserve screen space and auto-hide coordination verified.");
 
-
-
-
+// Every Text whose content is not a plain string literal must render as
+// PlainText; AutoText would let window titles or app names inject <img> tags
+// that make the shell fetch remote images.
+for (const file of fs.readdirSync(directory).filter((name) => name.endsWith(".qml"))) {
+  const source = fs.readFileSync(path.join(directory, file), "utf8");
+  const blocks = source.split(/\n(?=\s*Text\s*\{)/).slice(1);
+  for (const block of blocks) {
+    const body = block.split(/\n\s*\}/)[0];
+    const binding = (body.match(/\n\s*text:\s*(.+)/) || [])[1];
+    // Bindings that carry app or window data (titles, names, paths, tooltips).
+    if (!binding || !/(name|title|Name|Title|Target|location|tooltip)/.test(binding)) continue;
+    assert.match(body, /textFormat:\s*Text\.PlainText/,
+      `${file}: dynamic Text "${binding.trim()}" must set textFormat: Text.PlainText`);
+  }
+}
+console.log("PASS: dynamic Text elements render as PlainText.");
