@@ -756,6 +756,15 @@ function computeMagnifiedOffsets(scales, baseSize, expansionRatio) {
   return offsets;
 }
 
+// Upper bound on computeMagnifiedOffsets().totalExtra for any pointer
+// position. Only icons inside the magnify radius grow, at most one per slot
+// pitch, so the dock surface can be sized once instead of on every frame.
+function maxMagnifiedExtra(baseSize, spacing, maxScale, radius, expansionRatio) {
+  var pitch = Math.max(1, baseSize + spacing);
+  var slots = Math.ceil(2 * radius / pitch) + 1;
+  return slots * Math.max(0, maxScale - 1.0) * baseSize * expansionRatio;
+}
+
 // macOS swaps the Trash between an empty basket and a basket full of paper.
 // The freedesktop icon theme names the same two states, so the dock needs no
 // bundled artwork and inherits whatever trash art the theme ships.

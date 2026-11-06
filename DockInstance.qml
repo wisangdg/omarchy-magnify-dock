@@ -962,17 +962,24 @@ Item {
     visible: true
     screen: root.dockScreen
 
+    // Only the bottom edge is anchored, so the compositor centers a surface
+    // as wide as the dock and its widest magnification wave. A screen-wide
+    // surface made Hyprland re-blur a screen-wide strip on every animation
+    // frame, which stuttered with blur enabled.
     anchors {
       bottom: true
-      left: true
-      right: true
     }
 
     margins {
       bottom: 0
     }
 
-    implicitWidth: 0
+    implicitWidth: Math.min(
+      root.dockScreen ? root.dockScreen.width : Number.MAX_VALUE,
+      Math.ceil(contentRow.width + root.dockPadding * 2
+        + DockModel.maxMagnifiedExtra(root.baseIconSize, root.itemSpacing,
+          root.maxMagnification, root.magnifyRadius, root.layoutExpansionRatio)
+        + Math.max(Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0) * 2) + 8, 160)))
     implicitHeight: root.capsuleHeight
       + Math.ceil(root.iconPixelSize * (root.maxMagnification - 1.0))
       + 16

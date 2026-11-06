@@ -749,3 +749,21 @@ for (const file of fs.readdirSync(directory).filter((name) => name.endsWith(".qm
   }
 }
 console.log("PASS: dynamic Text elements render as PlainText.");
+
+// The dock surface is sized once from maxMagnifiedExtra, so that bound must
+// cover the widest wave any pointer position can produce.
+for (const [iconSize, magnification, spacing, count] of [[33, 1.6, 6, 14], [64, 2, 0, 30], [24, 1.05, 12, 3]]) {
+  const base = iconSize + 8;
+  const bound = model.maxMagnifiedExtra(base, spacing, magnification, 140, 0.82);
+  for (let cursor = -200; cursor <= count * (base + spacing) + 200; cursor += 1) {
+    const scales = Array.from({ length: count }, (_, i) =>
+      model.scaleFromDistance(Math.abs(cursor - (i * (base + spacing) + base / 2)), magnification, 140));
+    assert.ok(model.computeMagnifiedOffsets(scales, base, 0.82).totalExtra <= bound + 1e-9,
+      `wave exceeds surface bound at cursor ${cursor}`);
+  }
+}
+const panelQml = fs.readFileSync(path.join(directory, "DockInstance.qml"), "utf8")
+  .split("id: dockPanel")[1].split("WlrLayershell.namespace")[0];
+assert.ok(!/left:\s*true|right:\s*true/.test(panelQml),
+  "the dock surface must not stretch across the screen");
+console.log("PASS: dock surface fits the widest magnification wave without spanning the screen.");
